@@ -292,6 +292,11 @@
             </div>
 
             <div class="action-bar" style="justify-content: space-between; margin-top: 2rem; margin-bottom: 0;">
+                <button class="btn-secondary" id="checkUpdateBtn" type="button" title="从 GitHub 检查最新版本" style="border-color: rgba(100, 200, 255, 0.3); color: #6bc5ff;">🔍 检查更新</button>
+                <span id="updateResult" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
+            </div>
+
+            <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
                 <button class="btn-secondary" id="clearCacheBtn" title="清除浏览器记忆并重启抓取引擎" style="background: rgba(255, 100, 100, 0.1); border-color: rgba(255, 100, 100, 0.3); color: #ff6b6b;">🧹 清除本地缓存</button>
                 <div style="display: flex; gap: 10px;">
                     <button class="btn-secondary" id="closeSettingsBtn">取消</button>

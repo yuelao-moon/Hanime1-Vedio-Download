@@ -47,6 +47,7 @@ powershell -ExecutionPolicy Bypass -File package-exe.ps1
 - **失败自动重试**：下载失败自动重试最多 3 次，30 秒无进度也判定为超时重试
 - **历史记录**：仅保留已完成/下载失败两种标签；按标题去重，文件存在则覆盖为已完成
 - **全部重试**：一键重试所有失败任务
+- **本地文件跳过**：目标文件已存在时跳过下载直接标记完成
 
 ### 设置
 
@@ -81,8 +82,9 @@ powershell -ExecutionPolicy Bypass -File package-exe.ps1
 
 - 任务队列（`LinkedBlockingQueue` + `ConcurrentHashMap`）
 - 多线程并行下载（12 workers）
+- 解析串行化（`resolveLock`）：多任务并发时视频解析排队使用 Playwright，不阻塞下载插槽
 - 超时看门狗（30 秒无进度自动重试）
-- 文件存在性校验（`Files.exists + Files.size > 0`）
+- 文件存在性校验（`Files.exists + Files.size > 0`），本地已有视频则跳过下载直接完成
 - 断点续传（清理部分文件后重试）
 
 ### 打包

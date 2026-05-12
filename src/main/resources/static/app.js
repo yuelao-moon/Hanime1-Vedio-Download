@@ -1179,6 +1179,46 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // 检查更新
+    const checkUpdateBtn = document.getElementById("checkUpdateBtn");
+    const updateResult = document.getElementById("updateResult");
+    if (checkUpdateBtn && updateResult) {
+        checkUpdateBtn.addEventListener("click", async () => {
+            checkUpdateBtn.disabled = true;
+            updateResult.textContent = "检查中...";
+            updateResult.style.color = "var(--text-muted)";
+            try {
+                const resp = await fetch("/api/check-update");
+                if (!resp.ok) {
+                    updateResult.textContent = "检查失败: HTTP " + resp.status;
+                    updateResult.style.color = "#ff6b6b";
+                    return;
+                }
+                const data = await resp.json();
+                if (data.error) {
+                    updateResult.textContent = "检查失败: " + data.error;
+                    updateResult.style.color = "#ff6b6b";
+                    return;
+                }
+                if (data.hasUpdate) {
+                    updateResult.innerHTML = "发现新版本 <b>v" + escapeHtml(data.latestVersion) + "</b>！"
+                        + (data.downloadUrl
+                            ? ' <a href="' + escapeHtml(data.downloadUrl) + '" target="_blank" style="color:#6bc5ff">前往下载</a>'
+                            : "");
+                    updateResult.style.color = "#4ade80";
+                } else {
+                    updateResult.innerHTML = "已是最新版本 (v" + escapeHtml(data.currentVersion) + ")";
+                    updateResult.style.color = "var(--text-muted)";
+                }
+            } catch (err) {
+                updateResult.textContent = "网络错误: " + err.message;
+                updateResult.style.color = "#ff6b6b";
+            } finally {
+                checkUpdateBtn.disabled = false;
+            }
+        });
+    }
+
     closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
     settingsModal.addEventListener("click", (event) => {
         if (event.target === settingsModal) {

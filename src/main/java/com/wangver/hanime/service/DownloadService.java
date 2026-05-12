@@ -402,7 +402,16 @@ public class DownloadService {
                 Files.createDirectories(parent);
             }
             state.filePath = targetFile.toString();
-            state.status = DownloadStatus.DOWNLOADING;
+
+            // 检查文件是否已存在，存在则跳过下载直接完成
+            boolean fileAlreadyExists = Files.exists(targetFile) && Files.size(targetFile) > 0;
+            if (fileAlreadyExists) {
+                state.status = DownloadStatus.COMPLETED;
+                state.totalAmount = Files.size(targetFile);
+                state.completedAmount = Files.size(targetFile);
+                state.progressPercent = 100;
+            } else {
+                state.status = DownloadStatus.DOWNLOADING;
             broadcastSnapshot();
 
             // 进度超时检测（30秒无进度则判定为下载失败）
@@ -427,6 +436,7 @@ public class DownloadService {
             }, state.control);
 
             if (watchdog[0] != null) watchdog[0].cancel(false);
+            }
             state.control.throwIfCancelled();
             state.status = DownloadStatus.COMPLETED;
             state.progressPercent = 100.0;
