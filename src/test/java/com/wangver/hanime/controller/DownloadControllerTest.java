@@ -99,6 +99,28 @@ class DownloadControllerTest {
     }
 
     @Test
+    void pausesAllLiveTasks() throws Exception {
+        when(downloadService.pauseAll()).thenReturn(snapshot());
+
+        mockMvc.perform(post("/api/downloads/pause-all"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.historyTasks[0].title").value("完成任务"));
+
+        verify(downloadService).pauseAll();
+    }
+
+    @Test
+    void cancelsAllLiveTasks() throws Exception {
+        when(downloadService.cancelAll()).thenReturn(snapshot());
+
+        mockMvc.perform(post("/api/downloads/cancel-all"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.historyTasks[0].title").value("完成任务"));
+
+        verify(downloadService).cancelAll();
+    }
+
+    @Test
     void retriesTask() throws Exception {
         when(downloadService.retryTask("task-1")).thenReturn(snapshot());
 

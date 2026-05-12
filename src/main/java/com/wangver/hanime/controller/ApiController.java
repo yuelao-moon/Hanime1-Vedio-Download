@@ -19,7 +19,14 @@ import com.wangver.hanime.service.DownloadService;
 
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -92,6 +99,66 @@ public class ApiController {
         }
     }
 
+    @GetMapping("/check-update")
+    public ResponseEntity<Map<String, Object>> checkUpdate() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("currentVersion", com.wangver.hanime.service.AppVersion.VERSION);
+        result.put("hasUpdate", false);
+        result.put("latestVersion", com.wangver.hanime.service.AppVersion.VERSION);
+        result.put("downloadUrl", "");
+        result.put("releaseNotes", "");
+
+        try {
+            String apiUrl = "https://api.github.com/repos/"
+                + com.wangver.hanime.service.AppVersion.GITHUB_OWNER
+                + "/" + com.wangver.hanime.service.AppVersion.GITHUB_REPO
+                + "/releases/latest";
+
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(5)).build();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(apiUrl))
+                    .header("Accept", "application/vnd.github+json")
+                    .header("User-Agent", com.wangver.hanime.service.AppVersion.GITHUB_REPO)
+                    .timeout(Duration.ofSeconds(5))
+                    .GET().build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 200) {
+                Map<?, ?> githubResp = new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readValue(response.body(), Map.class);
+                String tagName = (String) githubResp.get("tag_name");
+                String latestVersion = tagName != null
+                        ? tagName.replaceAll("^v", "")
+                        : com.wangver.hanime.service.AppVersion.VERSION;
+                boolean hasUpdate = compareVersions(latestVersion,
+                        com.wangver.hanime.service.AppVersion.VERSION) > 0;
+                result.put("latestVersion", latestVersion);
+                result.put("hasUpdate", hasUpdate);
+                result.put("downloadUrl",
+                        githubResp.get("html_url") != null ? (String) githubResp.get("html_url") : "");
+                result.put("releaseNotes",
+                        githubResp.get("body") != null ? (String) githubResp.get("body") : "");
+            }
+        } catch (Exception e) {
+            result.put("error", e.getMessage());
+        }
+        return ResponseEntity.ok(result);
+    }
+
+    private int compareVersions(String v1, String v2) {
+        String[] a = v1.split("\\.");
+        String[] b = v2.split("\\.");
+        int n = Math.max(a.length, b.length);
+        for (int i = 0; i < n; i++) {
+            int x = i < a.length ? Integer.parseInt(a[i]) : 0;
+            int y = i < b.length ? Integer.parseInt(b[i]) : 0;
+            if (x != y) return x - y;
+        }
+        return 0;
+    }
+
     @GetMapping("/browse")
     public ResponseEntity<?> browseCategory(
             @RequestParam String category,
@@ -107,6 +174,40 @@ public class ApiController {
             e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("获取分类失败: " + e.getMessage());
         }
+    }
+
+    @GetMapping("/search")
+    public ResponseEntity<?> search(
+            @RequestParam(required = false, defaultValue = "") String query,
+            @RequestParam(required = false, defaultValue = "") String type,
+            @RequestParam(required = false, defaultValue = "") String genre,
+            @RequestParam(name = "tags[]", required = false) List<String> tags,
+            @RequestParam(required = false, defaultValue = "") String sort,
+            @RequestParam(required = false, defaultValue = "") String date,
+            @RequestParam(required = false, defaultValue = "") String duration,
+            @RequestParam(defaultValue = "1") int page) {
+        try {
+            return ResponseEntity.ok(browseService.fetchSearch(
+                    query,
+                    type,
+                    genre,
+                    tags == null ? List.of() : tags,
+                    sort,
+                    date,
+                    duration,
+                    page
+            ));
+        } catch (HttpSessionExpiredException e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("搜索失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/search/options")
+    public ResponseEntity<?> searchOptions() {
+        return ResponseEntity.ok(browseService.fetchSearchOptions());
     }
 
     /**

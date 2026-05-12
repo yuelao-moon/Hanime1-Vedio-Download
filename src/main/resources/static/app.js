@@ -6,6 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const closeSettingsBtn = document.getElementById("closeSettingsBtn");
     const saveSettingsBtn = document.getElementById("saveSettingsBtn");
     const downloadDirInput = document.getElementById("downloadDir");
+    const maxConcurrentDownloadsInput = document.getElementById("maxConcurrentDownloads");
     const downloadCenterBtn = document.getElementById("downloadCenterBtn");
     const downloadBadge = document.getElementById("downloadBadge");
     const downloadCenterModal = document.getElementById("downloadCenterModal");
@@ -15,7 +16,34 @@ document.addEventListener("DOMContentLoaded", () => {
     const downloadHistoryCount = document.getElementById("downloadHistoryCount");
     const downloadQueueList = document.getElementById("downloadQueueList");
     const downloadHistoryList = document.getElementById("downloadHistoryList");
+    const retryAllFailedBtn = document.getElementById("retryAllFailedBtn");
     const clearDownloadHistoryBtn = document.getElementById("clearDownloadHistoryBtn");
+    const pauseAllDownloadsBtn = document.getElementById("pauseAllDownloadsBtn");
+    const cancelAllDownloadsBtn = document.getElementById("cancelAllDownloadsBtn");
+    const globalSearch = document.getElementById("globalSearch");
+    const globalSearchExpandBtn = document.getElementById("globalSearchExpandBtn");
+    const globalSearchTypeSelect = document.getElementById("globalSearchTypeSelect");
+    const globalSearchInput = document.getElementById("globalSearchInput");
+    const globalFilterBtn = document.getElementById("globalFilterBtn");
+    const globalSearchSubmitBtn = document.getElementById("globalSearchSubmitBtn");
+    const browseSearchToolbar = document.getElementById("browseSearchToolbar");
+    const browseSearchTypeSelect = document.getElementById("browseSearchTypeSelect");
+    const browseSearchTagBtn = document.getElementById("browseSearchTagBtn");
+    const browseSearchSortSelect = document.getElementById("browseSearchSortSelect");
+    const browseSearchDateSelect = document.getElementById("browseSearchDateSelect");
+    const browseSearchDurationSelect = document.getElementById("browseSearchDurationSelect");
+    const browseSearchInput = document.getElementById("browseSearchInput");
+    const browseSearchSubmitBtn = document.getElementById("browseSearchSubmitBtn");
+    const searchFilterModal = document.getElementById("searchFilterModal");
+    const closeSearchFilterBtn = document.getElementById("closeSearchFilterBtn");
+    const searchTypeSelect = document.getElementById("searchTypeSelect");
+    const searchGenreSelect = document.getElementById("searchGenreSelect");
+    const searchSortSelect = document.getElementById("searchSortSelect");
+    const searchDateSelect = document.getElementById("searchDateSelect");
+    const searchDurationSelect = document.getElementById("searchDurationSelect");
+    const searchTagsPanel = document.getElementById("searchTagsPanel");
+    const resetSearchFiltersBtn = document.getElementById("resetSearchFiltersBtn");
+    const applySearchFiltersBtn = document.getElementById("applySearchFiltersBtn");
 
     const viewLanding = document.getElementById("viewLanding");
     const viewBrowse = document.getElementById("viewBrowse");
@@ -59,7 +87,18 @@ document.addEventListener("DOMContentLoaded", () => {
     let hlsInstance = null; // hls.js instance
     let currentView = 'viewLanding';
     let currentCategory = '裏番';
+    let currentBrowseMode = 'category';
     let currentPage = 1;
+    let currentSearchState = {
+        query: "",
+        type: "",
+        genre: "",
+        tags: [],
+        sort: "",
+        date: "",
+        duration: ""
+    };
+    let searchOptions = null;
     let currentVideoData = null;
     let currentBrowseVideos = [];
     let currentPlaylistItems = [];
@@ -91,6 +130,268 @@ document.addEventListener("DOMContentLoaded", () => {
             '"': '&quot;',
             "'": '&#39;'
         }[char]));
+    }
+
+    function normalizeSearchState(state = {}) {
+        return {
+            query: String(state.query || "").trim(),
+            type: String(state.type || "").trim(),
+            genre: String(state.genre || "").trim(),
+            tags: Array.isArray(state.tags) ? state.tags.filter(Boolean) : [],
+            sort: String(state.sort || "").trim(),
+            date: String(state.date || "").trim(),
+            duration: String(state.duration || "").trim()
+        };
+    }
+
+    function hasActiveSearchFilters(state = currentSearchState) {
+        const normalized = normalizeSearchState(state);
+        return Boolean(normalized.type || normalized.genre || normalized.sort || normalized.date || normalized.duration || normalized.tags.length);
+    }
+
+    function hasActiveSearchState(state = currentSearchState) {
+        const normalized = normalizeSearchState(state);
+        return Boolean(normalized.query || hasActiveSearchFilters(normalized));
+    }
+
+    function syncGlobalSearchChrome() {
+        if (!globalSearch) return;
+        globalSearch.classList.toggle("has-value", Boolean(globalSearchInput?.value.trim()));
+        globalSearch.classList.toggle("has-filters", hasActiveSearchFilters());
+        if (!globalSearchInput?.value.trim() && !hasActiveSearchFilters() && document.activeElement !== globalSearchInput) {
+            globalSearch.classList.add("collapsed");
+        }
+    }
+
+    function expandGlobalSearch(focus = false) {
+        if (!globalSearch) return;
+        globalSearch.classList.remove("collapsed");
+        if (focus && globalSearchInput) {
+            globalSearchInput.focus();
+        }
+    }
+
+    function collapseGlobalSearchIfIdle() {
+        window.setTimeout(syncGlobalSearchChrome, 120);
+    }
+
+    function setSelectOptions(select, values = [], allLabel = "全部") {
+        if (!select) return;
+        const current = select.value;
+        select.innerHTML = `<option value="">${allLabel}</option>` + values
+            .map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
+            .join("");
+        select.value = values.includes(current) ? current : "";
+    }
+
+    function syncSearchTypeControls() {
+        const state = normalizeSearchState(currentSearchState);
+        if (globalSearchTypeSelect) globalSearchTypeSelect.value = state.type;
+        if (browseSearchTypeSelect) browseSearchTypeSelect.value = state.type;
+        if (browseSearchSortSelect) browseSearchSortSelect.value = state.sort;
+        if (browseSearchDateSelect) browseSearchDateSelect.value = state.date;
+        if (browseSearchDurationSelect) browseSearchDurationSelect.value = state.duration;
+        if (globalSearchInput && document.activeElement !== globalSearchInput) {
+            globalSearchInput.value = state.query;
+        }
+        if (browseSearchInput && document.activeElement !== browseSearchInput) {
+            browseSearchInput.value = state.query;
+        }
+    }
+
+    function syncSearchControlsFromOptions(options = searchOptions || {}) {
+        setSelectOptions(globalSearchTypeSelect, options.types || [], "全部类型");
+        setSelectOptions(browseSearchTypeSelect, options.types || [], "全部类型");
+        setSelectOptions(browseSearchSortSelect, options.sorts || [], "排序方式");
+        setSelectOptions(browseSearchDateSelect, options.dates || [], "发布日期");
+        setSelectOptions(browseSearchDurationSelect, options.durations || [], "时长");
+        syncSearchTypeControls();
+    }
+
+    function updateSearchStateFromGlobalControls() {
+        currentSearchState = normalizeSearchState({
+            ...currentSearchState,
+            query: globalSearchInput?.value || "",
+            type: globalSearchTypeSelect?.value || ""
+        });
+        syncSearchTypeControls();
+        syncGlobalSearchChrome();
+    }
+
+    function updateSearchStateFromBrowseControls() {
+        currentSearchState = normalizeSearchState({
+            ...currentSearchState,
+            query: browseSearchInput?.value || "",
+            type: browseSearchTypeSelect?.value || "",
+            sort: browseSearchSortSelect?.value || "",
+            date: browseSearchDateSelect?.value || "",
+            duration: browseSearchDurationSelect?.value || ""
+        });
+        syncSearchTypeControls();
+        syncGlobalSearchChrome();
+    }
+
+    async function loadSearchOptions() {
+        if (searchOptions) {
+            return searchOptions;
+        }
+        try {
+            const response = await fetch("/api/search/options");
+            if (!response.ok) {
+                throw new Error(await response.text() || "筛选项载入失败");
+            }
+            searchOptions = await response.json();
+        } catch (error) {
+            console.error("搜索筛选项载入失败", error);
+            searchOptions = {
+                types: ["裏番", "泡麵番", "Motion Anime", "3DCG", "2.5D", "2D動畫", "AI生成", "MMD", "Cosplay"],
+                genres: ["裏番", "泡麵番", "Motion Anime", "3DCG", "2.5D", "2D動畫", "AI生成", "MMD", "Cosplay"],
+                sorts: ["本日排行"],
+                dates: ["過去 24 小時"],
+                durations: ["1 分鐘 +"],
+                tagGroups: [{ name: "常用标签", tags: ["巨乳", "魅魔", "中文字幕", "中文配音"] }]
+            };
+        }
+        syncSearchControlsFromOptions(searchOptions);
+        return searchOptions;
+    }
+
+    async function openSearchFilterModal() {
+        expandGlobalSearch(false);
+        const options = await loadSearchOptions();
+        setSelectOptions(searchTypeSelect, options.types || [], "全部类型");
+        setSelectOptions(searchGenreSelect, options.genres || [], "全部分类");
+        setSelectOptions(searchSortSelect, options.sorts || [], "全部排序");
+        setSelectOptions(searchDateSelect, options.dates || [], "全部日期");
+        setSelectOptions(searchDurationSelect, options.durations || [], "全部时长");
+        syncSearchFilterControls();
+        syncSearchControlsFromOptions(options);
+        renderSearchTags(options.tagGroups || []);
+        searchFilterModal.classList.remove("hidden");
+    }
+
+    function syncSearchFilterControls() {
+        const state = normalizeSearchState(currentSearchState);
+        if (searchTypeSelect) searchTypeSelect.value = state.type;
+        if (searchGenreSelect) searchGenreSelect.value = state.genre;
+        if (searchSortSelect) searchSortSelect.value = state.sort;
+        if (searchDateSelect) searchDateSelect.value = state.date;
+        if (searchDurationSelect) searchDurationSelect.value = state.duration;
+        syncSearchTypeControls();
+    }
+
+    function renderSearchTags(tagGroups) {
+        if (!searchTagsPanel) return;
+        const groups = Array.isArray(tagGroups) ? tagGroups : [];
+        if (groups.length === 0) {
+            searchTagsPanel.innerHTML = `<div class="download-empty">没有可用标签</div>`;
+            return;
+        }
+        const selected = new Set(currentSearchState.tags || []);
+        searchTagsPanel.innerHTML = groups.map((group) => {
+            const tags = Array.isArray(group.tags) ? group.tags : [];
+            return `
+                <section class="search-tag-group">
+                    <h3>${escapeHtml(group.name || "标签")}</h3>
+                    <div class="search-tag-list">
+                        ${tags.map((tag) => `
+                            <button class="search-tag-chip ${selected.has(tag) ? 'active' : ''}" type="button" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>
+                        `).join("")}
+                    </div>
+                </section>
+            `;
+        }).join("");
+    }
+
+    function readSearchFiltersFromModal() {
+        currentSearchState = normalizeSearchState({
+            ...currentSearchState,
+            query: globalSearchInput?.value || currentSearchState.query,
+            type: searchTypeSelect?.value || "",
+            genre: searchGenreSelect?.value || "",
+            sort: searchSortSelect?.value || "",
+            date: searchDateSelect?.value || "",
+            duration: searchDurationSelect?.value || "",
+            tags: currentSearchState.tags
+        });
+        syncSearchTypeControls();
+    }
+
+    function buildSearchParams(page = 1) {
+        const state = normalizeSearchState(currentSearchState);
+        const params = new URLSearchParams();
+        params.set("query", state.query);
+        params.set("type", state.type);
+        params.set("genre", state.genre);
+        state.tags.forEach(tag => params.append("tags[]", tag));
+        params.set("sort", state.sort);
+        params.set("date", state.date);
+        params.set("duration", state.duration);
+        params.set("page", String(page));
+        return params;
+    }
+
+    function buildSearchHash(page = 1) {
+        return `#search?${buildSearchParams(page).toString()}`;
+    }
+
+    function searchTitle() {
+        const state = normalizeSearchState(currentSearchState);
+        if (state.query) {
+            return `搜索：${state.query}`;
+        }
+        return "高级筛选结果";
+    }
+
+    function applyBrowseResult(data) {
+        const totalPagesIndicatorStr = document.getElementById('totalPagesIndicatorStr');
+        currentBrowseVideos = Array.isArray(data.videos) ? data.videos : [];
+        selectedBrowseItems.clear();
+        updateBrowseSelectionSummary();
+        browseLoader.classList.add("hidden");
+        renderVideoGrid(currentBrowseVideos);
+
+        if (data.totalPages && totalPagesIndicatorStr) {
+            totalPagesIndicatorStr.innerText = `/ ${data.totalPages}`;
+            if (nextPageBtn) {
+                nextPageBtn.disabled = (currentPage >= data.totalPages);
+            }
+        } else if (totalPagesIndicatorStr) {
+            totalPagesIndicatorStr.innerText = "";
+            if (nextPageBtn) {
+                nextPageBtn.disabled = false;
+            }
+        }
+    }
+
+    async function loadSearchResults(page = 1, pushState = true) {
+        currentBrowseMode = "search";
+        currentPage = page;
+        currentSearchState = normalizeSearchState(currentSearchState);
+        syncSearchTypeControls();
+        syncGlobalSearchChrome();
+        switchView("viewBrowse", false);
+
+        const pageIndicator = document.getElementById('pageIndicator');
+        if (currentCategoryTitle) currentCategoryTitle.innerText = searchTitle();
+        if (pageIndicator) pageIndicator.innerText = page;
+        if (pushState) {
+            history.pushState({ view: "viewBrowse", search: true, page, filters: currentSearchState }, "", buildSearchHash(page));
+        }
+
+        videoGrid.innerHTML = "";
+        browseLoader.classList.remove("hidden");
+
+        try {
+            const response = await fetch(`/api/search?${buildSearchParams(page).toString()}`);
+            if (!response.ok) {
+                throw new Error(await response.text() || "搜索失败");
+            }
+            applyBrowseResult(await response.json());
+        } catch (error) {
+            browseLoader.classList.add("hidden");
+            videoGrid.innerHTML = `<div style="color:red; padding: 2rem; text-align: center;">搜索异常: ${escapeHtml(error.message)}</div>`;
+        }
     }
 
     function normalizeSnapshot(snapshot = {}) {
@@ -141,6 +442,15 @@ document.addEventListener("DOMContentLoaded", () => {
         return `/api/local-cover/${encodeURIComponent(task.id)}`;
     }
 
+    // 封面图片横竖检测
+    window.setHistoryCoverOrientation = function(img) {
+        const parent = img.parentElement;
+        if (!parent) return;
+        const isLandscape = img.naturalWidth > img.naturalHeight;
+        img.className = 'download-history-thumb' + (isLandscape ? ' landscape' : ' portrait');
+        parent.className = 'download-history-cover' + (isLandscape ? ' landscape' : ' portrait');
+    };
+
     function renderHistoryPlaceholder() {
         return `<div class="download-history-thumb placeholder">No Cover</div>`;
     }
@@ -155,8 +465,19 @@ document.addEventListener("DOMContentLoaded", () => {
         downloadBadge.textContent = liveTasks.length;
         downloadLiveCount.textContent = liveTasks.length;
         downloadHistoryCount.textContent = snapshot.historyTasks.length;
+        if (retryAllFailedBtn) {
+            const hasFailedOrCancelled = snapshot.historyTasks.some(task => task.status !== "COMPLETED");
+            retryAllFailedBtn.disabled = !hasFailedOrCancelled;
+        }
         if (clearDownloadHistoryBtn) {
             clearDownloadHistoryBtn.disabled = snapshot.historyTasks.length === 0;
+        }
+        if (pauseAllDownloadsBtn) {
+            const hasPausableTasks = liveTasks.some(task => task.status === "PREPARING" || task.status === "DOWNLOADING" || task.status === "QUEUED");
+            pauseAllDownloadsBtn.disabled = !hasPausableTasks;
+        }
+        if (cancelAllDownloadsBtn) {
+            cancelAllDownloadsBtn.disabled = liveTasks.length === 0;
         }
         downloadCenterSummary.textContent = liveTasks.length > 0
             ? `当前有 ${liveTasks.length} 个任务正在执行或排队`
@@ -199,9 +520,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const coverUrl = historyCoverUrl(task);
             const fallbackCoverUrl = proxiedImageUrl(task.thumbnail);
             const cover = coverUrl
-                ? `<img src="${coverUrl}" class="download-history-thumb" alt="cover" loading="lazy" data-fallback-src="${escapeHtml(fallbackCoverUrl)}">`
+                ? `<img src="${coverUrl}" class="download-history-thumb" alt="cover" loading="lazy" onerror="this.style.display='none'" onload="setHistoryCoverOrientation(this)" data-fallback-src="${escapeHtml(fallbackCoverUrl)}">`
                 : (fallbackCoverUrl
-                    ? `<img src="${fallbackCoverUrl}" class="download-history-thumb" alt="cover" loading="lazy">`
+                    ? `<img src="${fallbackCoverUrl}" class="download-history-thumb" alt="cover" loading="lazy" onload="setHistoryCoverOrientation(this)">`
                     : renderHistoryPlaceholder());
             return `
             <article class="download-card history ${clickableClass} ${String(task.status || "").toLowerCase()}" data-page-url="${pageUrl}" tabindex="${task.pageUrl ? '0' : '-1'}">
@@ -211,7 +532,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="download-history-content">
                     <div class="download-card-head">
                         <h4 title="${title}">${title}</h4>
-                        <span class="download-status-badge">${formatStatus(task.status)}</span>
+                        ${task.status === "COMPLETED"
+                            ? `<span class="download-status-badge" style="color:#4ade80">已完成</span>`
+                            : `<button class="download-action-btn" type="button" title="点击重新下载" data-action="retry" data-task-id="${escapeHtml(task.id)}">下载失败 - 重新下载</button>`}
                     </div>
                     <div class="download-meta" title="${meta}">${meta}</div>
                     <div class="download-actions">${taskActionButtons(task)}</div>
@@ -272,13 +595,53 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     let snapshotFrameId = null;
+    let lastSnapshotHash = "";
+    function getStructureHash(snap) {
+        const all = [...snap.activeTasks, ...snap.queuedTasks, ...snap.historyTasks];
+        return all.map(t => t.id + "|" + t.status).join(",");
+    }
     function applyDownloadSnapshot(snapshot) {
-        downloadSnapshot = normalizeSnapshot(snapshot);
-        if (snapshotFrameId) return;
-        snapshotFrameId = requestAnimationFrame(() => {
-            snapshotFrameId = null;
-            if (!downloadCenterModal.classList.contains("hidden")) {
-                renderDownloadCenter();
+        const normalized = normalizeSnapshot(snapshot);
+        const newHash = getStructureHash(normalized);
+        const oldHash = lastSnapshotHash;
+        downloadSnapshot = normalized;
+
+        if (newHash !== oldHash) {
+            lastSnapshotHash = newHash;
+            if (snapshotFrameId) return;
+            snapshotFrameId = requestAnimationFrame(() => {
+                snapshotFrameId = null;
+                if (!downloadCenterModal.classList.contains("hidden")) {
+                    renderDownloadCenter();
+                }
+            });
+        } else if (oldHash !== "" && !downloadCenterModal.classList.contains("hidden")) {
+            updateDownloadProgress();
+        }
+    }
+    function updateDownloadProgress() {
+        const liveTasks = [...downloadSnapshot.activeTasks, ...downloadSnapshot.queuedTasks];
+        const queueCards = downloadQueueList.querySelectorAll(".download-card");
+        queueCards.forEach((card, index) => {
+            const task = liveTasks[index];
+            if (!task) return;
+            const progressBar = card.querySelector(".progress-bar");
+            if (progressBar) {
+                progressBar.style.width = `${Math.max(0, Math.min(100, Number(task.progressPercent || 0)))}%`;
+            }
+            const meta = card.querySelector(".download-meta");
+            if (meta && task.status !== "FAILED") {
+                const percent = Number(task.progressPercent || 0);
+                meta.textContent = task.status === "DOWNLOADING" || task.status === "PREPARING"
+                    ? `${percent.toFixed(0)}%`
+                    : meta.textContent;
+            }
+            const statusBadge = card.querySelector(".download-status-badge");
+            if (statusBadge) {
+                const newLabel = formatStatus(task.status);
+                if (statusBadge.textContent !== newLabel) {
+                    statusBadge.textContent = newLabel;
+                }
             }
         });
     }
@@ -358,6 +721,18 @@ document.addEventListener("DOMContentLoaded", () => {
             const errorText = await response.text();
             throw new Error(errorText || `任务${action}失败`);
         }
+        applyDownloadSnapshot(await response.json());
+    }
+
+    async function performDownloadBulkAction(action) {
+        const response = await fetch(`/api/downloads/${action}`, {
+            method: "POST"
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || "批量操作失败");
+        }
+        applyDownloadSnapshot(await response.json());
     }
 
     async function clearDownloadHistory() {
@@ -504,7 +879,13 @@ document.addEventListener("DOMContentLoaded", () => {
     function handleStateRestore(state) {
         if (state.view) {
             switchView(state.view, false);
-            if (state.view === "viewBrowse" && state.category) {
+            if (state.view === "viewBrowse" && state.search) {
+                currentSearchState = normalizeSearchState(state.filters || {});
+                if (globalSearchInput) {
+                    globalSearchInput.value = currentSearchState.query;
+                }
+                loadSearchResults(state.page || 1, false);
+            } else if (state.view === "viewBrowse" && state.category) {
                 loadBrowseCategory(state.category, state.page || 1, false);
                 const liToActivate = document.querySelector(`#categoryList li[data-cat="${state.category}"]`);
                 if(liToActivate) {
@@ -520,6 +901,72 @@ document.addEventListener("DOMContentLoaded", () => {
     navLogo.addEventListener("click", () => switchView("viewLanding"));
     modeBrowseBtn.addEventListener("click", () => switchView("viewBrowse"));
     modeParseBtn.addEventListener("click", () => switchView("viewParser"));
+    if (globalSearchExpandBtn) {
+        globalSearchExpandBtn.addEventListener("click", () => expandGlobalSearch(true));
+    }
+    if (globalSearchInput) {
+        globalSearchInput.addEventListener("focus", () => expandGlobalSearch(false));
+        globalSearchInput.addEventListener("input", syncGlobalSearchChrome);
+        globalSearchInput.addEventListener("blur", collapseGlobalSearchIfIdle);
+        globalSearchInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                updateSearchStateFromGlobalControls();
+                loadSearchResults(1, true);
+            } else if (event.key === "Escape") {
+                event.preventDefault();
+                globalSearchInput.blur();
+                collapseGlobalSearchIfIdle();
+            }
+        });
+    }
+    if (globalSearchTypeSelect) {
+        globalSearchTypeSelect.addEventListener("focus", () => expandGlobalSearch(false));
+        globalSearchTypeSelect.addEventListener("change", () => {
+            updateSearchStateFromGlobalControls();
+            expandGlobalSearch(false);
+        });
+    }
+    if (globalSearchSubmitBtn) {
+        globalSearchSubmitBtn.addEventListener("click", () => {
+            updateSearchStateFromGlobalControls();
+            loadSearchResults(1, true);
+        });
+    }
+    if (globalFilterBtn) {
+        globalFilterBtn.addEventListener("click", openSearchFilterModal);
+    }
+    if (browseSearchInput) {
+        browseSearchInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                updateSearchStateFromBrowseControls();
+                loadSearchResults(1, true);
+            }
+        });
+    }
+    [browseSearchTypeSelect, browseSearchSortSelect, browseSearchDateSelect, browseSearchDurationSelect].forEach((control) => {
+        if (!control) return;
+        control.addEventListener("change", updateSearchStateFromBrowseControls);
+    });
+    if (browseSearchSubmitBtn) {
+        browseSearchSubmitBtn.addEventListener("click", () => {
+            updateSearchStateFromBrowseControls();
+            loadSearchResults(1, true);
+        });
+    }
+    if (browseSearchTagBtn) {
+        browseSearchTagBtn.addEventListener("click", openSearchFilterModal);
+    }
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.target.closest("input, textarea, select")) {
+            event.preventDefault();
+            expandGlobalSearch(true);
+        }
+        if (event.key === "Escape" && searchFilterModal && !searchFilterModal.classList.contains("hidden")) {
+            searchFilterModal.classList.add("hidden");
+        }
+    });
     downloadCenterBtn.addEventListener("click", () => {
         downloadCenterModal.classList.remove("hidden");
         renderDownloadCenter();
@@ -530,6 +977,48 @@ document.addEventListener("DOMContentLoaded", () => {
             downloadCenterModal.classList.add("hidden");
         }
     });
+    if (closeSearchFilterBtn) {
+        closeSearchFilterBtn.addEventListener("click", () => searchFilterModal.classList.add("hidden"));
+    }
+    if (searchFilterModal) {
+        searchFilterModal.addEventListener("click", (event) => {
+            if (event.target === searchFilterModal) {
+                searchFilterModal.classList.add("hidden");
+            }
+            const tagButton = event.target.closest(".search-tag-chip[data-tag]");
+            if (tagButton) {
+                const tag = tagButton.dataset.tag;
+                const tags = new Set(currentSearchState.tags || []);
+                if (tags.has(tag)) {
+                    tags.delete(tag);
+                } else {
+                    tags.add(tag);
+                }
+                currentSearchState = normalizeSearchState({ ...currentSearchState, tags: Array.from(tags) });
+                tagButton.classList.toggle("active", tags.has(tag));
+                syncSearchTypeControls();
+                syncGlobalSearchChrome();
+            }
+        });
+    }
+    if (resetSearchFiltersBtn) {
+        resetSearchFiltersBtn.addEventListener("click", () => {
+            currentSearchState = normalizeSearchState({
+                query: browseSearchInput?.value || globalSearchInput?.value || ""
+            });
+            syncSearchFilterControls();
+            renderSearchTags(searchOptions?.tagGroups || []);
+            syncGlobalSearchChrome();
+        });
+    }
+    if (applySearchFiltersBtn) {
+        applySearchFiltersBtn.addEventListener("click", () => {
+            readSearchFiltersFromModal();
+            searchFilterModal.classList.add("hidden");
+            syncGlobalSearchChrome();
+            loadSearchResults(1, true);
+        });
+    }
     downloadCenterModal.addEventListener("click", async (event) => {
         const actionButton = event.target.closest("[data-action][data-task-id]");
         if (!actionButton) {
@@ -568,6 +1057,71 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
     }
+    if (pauseAllDownloadsBtn) {
+        pauseAllDownloadsBtn.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const liveTasks = [...downloadSnapshot.activeTasks, ...downloadSnapshot.queuedTasks];
+            if (liveTasks.length === 0) {
+                return;
+            }
+
+            try {
+                pauseAllDownloadsBtn.disabled = true;
+                await performDownloadBulkAction("pause-all");
+            } catch (error) {
+                alert(`全部暂停失败: ${error.message}`);
+            } finally {
+                pauseAllDownloadsBtn.disabled = false;
+                renderDownloadCenter();
+            }
+        });
+    }
+    if (cancelAllDownloadsBtn) {
+        cancelAllDownloadsBtn.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const liveTasks = [...downloadSnapshot.activeTasks, ...downloadSnapshot.queuedTasks];
+            if (liveTasks.length === 0) {
+                return;
+            }
+            if (!confirm("确定要取消所有正在进行和排队的下载吗？已完成历史不会被清除。")) {
+                return;
+            }
+
+            try {
+                cancelAllDownloadsBtn.disabled = true;
+                await performDownloadBulkAction("cancel-all");
+            } catch (error) {
+                alert(`全部取消失败: ${error.message}`);
+            } finally {
+                cancelAllDownloadsBtn.disabled = false;
+                renderDownloadCenter();
+            }
+        });
+    }
+    if (retryAllFailedBtn && downloadCenterModal) {
+        downloadCenterModal.addEventListener("click", async (event) => {
+            const retryBtn = event.target.closest("#retryAllFailedBtn");
+            if (!retryBtn) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const historyTasks = downloadSnapshot?.historyTasks || [];
+            const failedTasks = historyTasks.filter(task => task.status !== "COMPLETED");
+            if (failedTasks.length === 0 || !confirm(`确定要重试所有 ${failedTasks.length} 个失败或已取消的下载任务吗？`)) {
+                return;
+            }
+            try {
+                retryAllFailedBtn.disabled = true;
+                await performDownloadBulkAction("retry-all-failed");
+            } catch (error) {
+                alert(`全部重试失败: ${error.message}`);
+            } finally {
+                retryAllFailedBtn.disabled = false;
+                renderDownloadCenter();
+            }
+        });
+    }
     downloadHistoryList.addEventListener("click", (event) => {
         if (event.target.closest("[data-action][data-task-id]")) {
             return;
@@ -591,6 +1145,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/settings");
             const data = await res.json();
             downloadDirInput.value = data.downloadDirectory || "";
+            if (maxConcurrentDownloadsInput) {
+                maxConcurrentDownloadsInput.value = data.maxConcurrentDownloads || 3;
+            }
         } catch (e) {
             console.error("Failed to load settings");
         }
@@ -622,6 +1179,46 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // 检查更新
+    const checkUpdateBtn = document.getElementById("checkUpdateBtn");
+    const updateResult = document.getElementById("updateResult");
+    if (checkUpdateBtn && updateResult) {
+        checkUpdateBtn.addEventListener("click", async () => {
+            checkUpdateBtn.disabled = true;
+            updateResult.textContent = "检查中...";
+            updateResult.style.color = "var(--text-muted)";
+            try {
+                const resp = await fetch("/api/check-update");
+                if (!resp.ok) {
+                    updateResult.textContent = "检查失败: HTTP " + resp.status;
+                    updateResult.style.color = "#ff6b6b";
+                    return;
+                }
+                const data = await resp.json();
+                if (data.error) {
+                    updateResult.textContent = "检查失败: " + data.error;
+                    updateResult.style.color = "#ff6b6b";
+                    return;
+                }
+                if (data.hasUpdate) {
+                    updateResult.innerHTML = "发现新版本 <b>v" + escapeHtml(data.latestVersion) + "</b>！"
+                        + (data.downloadUrl
+                            ? ' <a href="' + escapeHtml(data.downloadUrl) + '" target="_blank" style="color:#6bc5ff">前往下载</a>'
+                            : "");
+                    updateResult.style.color = "#4ade80";
+                } else {
+                    updateResult.innerHTML = "已是最新版本 (v" + escapeHtml(data.currentVersion) + ")";
+                    updateResult.style.color = "var(--text-muted)";
+                }
+            } catch (err) {
+                updateResult.textContent = "网络错误: " + err.message;
+                updateResult.style.color = "#ff6b6b";
+            } finally {
+                checkUpdateBtn.disabled = false;
+            }
+        });
+    }
+
     closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
     settingsModal.addEventListener("click", (event) => {
         if (event.target === settingsModal) {
@@ -632,14 +1229,18 @@ document.addEventListener("DOMContentLoaded", () => {
     saveSettingsBtn.addEventListener("click", async () => {
         const newVal = downloadDirInput.value.trim();
         if (!newVal) return alert("下载目录不能为空");
+        const maxConcurrentDownloads = Number.parseInt(maxConcurrentDownloadsInput?.value || "3", 10);
+        if (!Number.isInteger(maxConcurrentDownloads) || maxConcurrentDownloads < 1 || maxConcurrentDownloads > 12) {
+            return alert("并行下载数量必须在 1 到 12 之间");
+        }
         try {
             const res = await fetch("/api/settings", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ downloadDirectory: newVal })
+                body: JSON.stringify({ downloadDirectory: newVal, maxConcurrentDownloads })
             });
             if(res.ok) {
-                alert("全局设置已保存！后端并发下载模块将应用此路经。");
+                alert("全局设置已保存！新的并行下载数量会立即用于后续调度。");
                 settingsModal.classList.add("hidden");
             } else {
                 alert("保存失败!");
@@ -865,6 +1466,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Fetch and display category grid
     async function loadBrowseCategory(category, page = 1, pushState = true) {
+        currentBrowseMode = "category";
         currentCategory = category;
         currentPage = page;
         
@@ -891,28 +1493,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 throw new Error(errText || "无法获取该分类资源，可能被盾");
             }
             
-            const data = await resp.json();
-            currentBrowseVideos = Array.isArray(data.videos) ? data.videos : [];
-            selectedBrowseItems.clear();
-            updateBrowseSelectionSummary();
-            
-            loader.classList.add("hidden");
-            renderVideoGrid(currentBrowseVideos);
-
-            // Update Pagination limit
-            if (data.totalPages && totalPagesIndicatorStr) {
-                totalPagesIndicatorStr.innerText = `/ ${data.totalPages}`;
-                const nextBtn = document.getElementById('nextPageBtn');
-                if (nextBtn) {
-                    nextBtn.disabled = (currentPage >= data.totalPages);
-                }
-            } else if (totalPagesIndicatorStr) {
-                totalPagesIndicatorStr.innerText = "";
-            }
+            applyBrowseResult(await resp.json());
 
         } catch (err) {
             loader.classList.add("hidden");
-            grid.innerHTML = `<div style="color:red; padding: 2rem; text-align: center;">获取异常: ${err.message}</div>`;
+            grid.innerHTML = `<div style="color:red; padding: 2rem; text-align: center;">获取异常: ${escapeHtml(err.message)}</div>`;
         }
     }
 
@@ -923,13 +1508,21 @@ document.addEventListener("DOMContentLoaded", () => {
     if (prevPageBtn) prevPageBtn.onclick = () => {
         if (currentPage > 1) {
             currentPage--;
-            loadBrowseCategory(currentCategory, currentPage, true);
+            if (currentBrowseMode === "search") {
+                loadSearchResults(currentPage, true);
+            } else {
+                loadBrowseCategory(currentCategory, currentPage, true);
+            }
         }
     };
 
     if (nextPageBtn) nextPageBtn.onclick = () => {
         currentPage++;
-        loadBrowseCategory(currentCategory, currentPage, true);
+        if (currentBrowseMode === "search") {
+            loadSearchResults(currentPage, true);
+        } else {
+            loadBrowseCategory(currentCategory, currentPage, true);
+        }
     };
 
     categoryListItems.forEach(li => {
@@ -939,6 +1532,7 @@ document.addEventListener("DOMContentLoaded", () => {
             li.classList.add("active");
 
             const category = li.getAttribute("data-cat");
+            currentBrowseMode = "category";
             loadBrowseCategory(category, 1, true);
         });
     });
@@ -966,7 +1560,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="grid-thumb-container">
                     <img src="/api/proxy/image?url=${encodeURIComponent(vid.thumbnail)}" class="grid-thumb" alt="cover">
                 </div>
-                <div class="grid-title" title="${vid.title}">${vid.title}</div>
+                <div class="grid-title" title="${escapeHtml(vid.title || "")}">${escapeHtml(vid.title || "未命名视频")}</div>
             `;
             const selectButton = card.querySelector(".grid-select-toggle");
             setBrowseSelectionState(card, selectButton, isSelected);
@@ -1037,6 +1631,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     updateBrowseSelectionSummary();
     updateSeriesDownloadButton();
+    loadSearchOptions();
+    syncSearchTypeControls();
+    syncGlobalSearchChrome();
     renderDownloadCenter();
     fetchDownloadSnapshot();
     connectDownloadStream();

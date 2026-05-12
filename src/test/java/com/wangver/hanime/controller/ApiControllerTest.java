@@ -19,7 +19,9 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Map;
 
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -96,6 +98,71 @@ class ApiControllerTest {
                 .andExpect(content().bytes(new byte[]{4, 5, 6}));
 
         verify(historyCoverService).fetchCover("https://hanime1.me/watch?v=102579", null);
+    }
+
+    @Test
+    void searchesWithKeywordTagsAndFilters() throws Exception {
+        when(browseService.fetchSearch(
+                "巨乳",
+                "",
+                "",
+                List.of("魅魔"),
+                "本日排行",
+                "過去 24 小時",
+                "1 分鐘 +",
+                2
+        )).thenReturn(Map.of(
+                "videos", List.of(Map.of(
+                        "title", "搜索结果",
+                        "url", "https://hanime1.me/watch?v=1",
+                        "thumbnail", "https://cdn.example.com/1.jpg"
+                )),
+                "currentPage", 2,
+                "totalPages", 5
+        ));
+
+        mockMvc.perform(get("/api/search")
+                        .param("query", "巨乳")
+                        .param("type", "")
+                        .param("genre", "")
+                        .param("tags[]", "魅魔")
+                        .param("sort", "本日排行")
+                        .param("date", "過去 24 小時")
+                        .param("duration", "1 分鐘 +")
+                        .param("page", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.videos[0].title").value("搜索结果"))
+                .andExpect(jsonPath("$.currentPage").value(2))
+                .andExpect(jsonPath("$.totalPages").value(5));
+
+        verify(browseService).fetchSearch(
+                eq("巨乳"),
+                eq(""),
+                eq(""),
+                eq(List.of("魅魔")),
+                eq("本日排行"),
+                eq("過去 24 小時"),
+                eq("1 分鐘 +"),
+                eq(2)
+        );
+    }
+
+    @Test
+    void returnsSearchOptions() throws Exception {
+        when(browseService.fetchSearchOptions()).thenReturn(Map.of(
+                "types", List.of("裏番"),
+                "sorts", List.of("本日排行"),
+                "dates", List.of("過去 24 小時"),
+                "durations", List.of("1 分鐘 +"),
+                "tagGroups", List.of(Map.of("name", "角色設定", "tags", List.of("魅魔")))
+        ));
+
+        mockMvc.perform(get("/api/search/options"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.durations[0]").value("1 分鐘 +"))
+                .andExpect(jsonPath("$.tagGroups[0].tags[0]").value("魅魔"));
+
+        verify(browseService).fetchSearchOptions();
     }
 
     private DownloadSnapshot snapshot() {

@@ -48,9 +48,24 @@ public class DownloadController {
         return ResponseEntity.ok(downloadService.cancelTask(taskId));
     }
 
+    @PostMapping("/pause-all")
+    public ResponseEntity<DownloadSnapshot> pauseAll() {
+        return ResponseEntity.ok(downloadService.pauseAll());
+    }
+
+    @PostMapping("/cancel-all")
+    public ResponseEntity<DownloadSnapshot> cancelAll() {
+        return ResponseEntity.ok(downloadService.cancelAll());
+    }
+
     @PostMapping("/{taskId}/retry")
     public ResponseEntity<DownloadSnapshot> retry(@PathVariable String taskId) {
         return ResponseEntity.ok(downloadService.retryTask(taskId));
+    }
+
+    @PostMapping("/retry-all-failed")
+    public ResponseEntity<DownloadSnapshot> retryAllFailed() {
+        return ResponseEntity.ok(downloadService.retryAllFailed());
     }
 
     @DeleteMapping("/history")

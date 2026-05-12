@@ -5,6 +5,7 @@ target/
 
 # IDE
 .idea/
+.deepseek/
 *.iml
 *.ipr
 *.iws
@@ -23,6 +24,7 @@ Thumbs.db
 # Runtime cache / output
 cache/
 output/
+dist/
 history-cover-cache/
 *.log
 

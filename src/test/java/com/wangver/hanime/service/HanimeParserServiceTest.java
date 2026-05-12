@@ -120,6 +120,26 @@ class HanimeParserServiceTest {
     }
 
     @Test
+    void prefersDirectDownloadUrlWhenPlaywrightFindsLinkEarly() throws Exception {
+        HanimeParserService service = new HanimeParserService();
+        String pageHtml = "<html><body><source src='https://cdn.example.com/video.m3u8'></body></html>";
+
+        Method method = HanimeParserService.class.getDeclaredMethod("buildParseResult", String.class, String.class, String.class, String.class);
+        method.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) method.invoke(
+                service,
+                "https://hanime1.me/watch?v=test",
+                pageHtml,
+                null,
+                "https://rapidgator.net/file/direct"
+        );
+
+        assertEquals("https://rapidgator.net/file/direct", result.get("videoUrl"));
+    }
+
+    @Test
     void takesFirstStreamFromSourceTagWhenNoDownloadTable() throws Exception {
         HanimeParserService service = new HanimeParserService();
         String html = "<html><body><video><source src='https://cdn.example.com/video-720p.mp4'></video></body></html>";

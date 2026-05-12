@@ -74,32 +74,64 @@ public class HanimeParserService {
     }
 
     private Map<String, Object> parseWithPlaywright(String url, String videoId) throws Exception {
-        return browserService.runSerialized(() -> {
-            Page page = browserService.createPage();
+        Exception lastError = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            final int idx = attempt;
             try {
-                page.navigate(url, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(60000));
-                page.waitForSelector(".video-details-wrapper, #player, .title, h1.title, h3.title",
-                        new Page.WaitForSelectorOptions().setTimeout(20000));
-
-                String html = page.content();
-                String downloadHtml = null;
-
-                if (videoId != null && !videoId.isBlank()) {
+                return browserService.runSerialized(() -> {
+                    Page page = browserService.createPage();
                     try {
-                        page.navigate("https://hanime1.me/download?v=" + videoId);
-                        page.waitForSelector("table.download-table a[data-url], a[data-url]",
-                                new Page.WaitForSelectorOptions().setTimeout(10000));
-                        downloadHtml = page.content();
-                    } catch (Exception e) {
-                        System.out.println("下载页获取失败: " + e.getMessage());
-                    }
-                }
+                        page.navigate(url, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(60000));
+                        page.waitForSelector(".video-details-wrapper, #player, .title, h1.title, h3.title, article.download-section",
+                                new Page.WaitForSelectorOptions().setTimeout(30000));
 
-                return buildParseResult(url, html, downloadHtml);
-            } finally {
-                closePageQuietly(page);
+                        String html = page.content();
+                        String downloadUrl = null;
+
+                        if (videoId != null && !videoId.isBlank()) {
+                            try {
+                                downloadUrl = fetchFirstDownloadUrlWithPlaywright(page, videoId, idx);
+                            } catch (Exception e) {
+                                System.out.println("下载页获取失败: " + e.getMessage());
+                            }
+                        }
+
+                        return buildParseResult(url, html, null, downloadUrl);
+                    } finally {
+                        closePageQuietly(page);
+                    }
+                });
+            } catch (PlaywrightException e) {
+                lastError = e;
+                System.out.println("Playwright解析失败第" + (attempt+1) + "次，重试中: " + e.getMessage());
+                try { Thread.sleep(500); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
             }
-        });
+        }
+        if (lastError != null) throw lastError;
+        throw new Exception("Playwright解析失败: 重试耗尽");
+    }
+
+    private String fetchFirstDownloadUrlWithPlaywright(Page page, String videoId, int depth) {
+        try {
+        page.navigate("https://hanime1.me/download?v=" + videoId,
+                new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(60000));
+        } catch (PlaywrightException e) {
+            if (depth > 0) throw e;
+            System.out.println("下载页导航失败，尝试刷新页面: " + e.getMessage());
+            try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            page.navigate("https://hanime1.me/download?v=" + videoId,
+                    new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(60000));
+        }
+        ElementHandle downloadButton = page.waitForSelector("table.download-table a[data-url], a[data-url]",
+                new Page.WaitForSelectorOptions().setTimeout(15000));
+        if (downloadButton == null) {
+            return null;
+        }
+        String url = downloadButton.getAttribute("data-url");
+        if (url == null || url.isBlank() || url.toLowerCase(Locale.ROOT).contains("juicyads")) {
+            return null;
+        }
+        return url.replace("&amp;", "&");
     }
 
     private void closePageQuietly(Page page) {
@@ -110,9 +142,13 @@ public class HanimeParserService {
     }
 
     private Map<String, Object> buildParseResult(String url, String html, String downloadHtml) {
+        return buildParseResult(url, html, downloadHtml, null);
+    }
+
+    private Map<String, Object> buildParseResult(String url, String html, String downloadHtml, String directDownloadUrl) {
         Map<String, Object> result = new HashMap<>();
-        String videoUrl = null;
-        if (downloadHtml != null && !downloadHtml.isBlank()) {
+        String videoUrl = directDownloadUrl;
+        if ((videoUrl == null || videoUrl.isBlank()) && downloadHtml != null && !downloadHtml.isBlank()) {
             videoUrl = extractFirstStream(downloadHtml);
         }
         if (videoUrl == null || videoUrl.isBlank()) {
@@ -122,13 +158,20 @@ public class HanimeParserService {
         result.put("videoUrl", videoUrl != null ? videoUrl.replace("&amp;", "&") : "");
 
         Document doc = Jsoup.parse(html);
-        Element titleEl = doc.selectFirst("h3.title, h1.title, .title, .video-title");
+        // 优先使用更精确的选择器定位主视频标题，避免误取相关视频的 .title
+        Element titleEl = doc.selectFirst(".video-details-wrapper h1.title, .video-details-wrapper h3.title, "
+                + ".video-description h1, .video-description .title, "
+                + ".video-info h1.title, "
+                + "h1.title, "
+                + "meta[property=og:title], meta[name=title]");
         if (titleEl != null) {
-            result.put("title", TitleTextNormalizer.normalize(titleEl.text()));
+            if (titleEl.is("meta")) {
+                result.put("title", TitleTextNormalizer.normalize(titleEl.attr("content")));
+            } else {
+                result.put("title", TitleTextNormalizer.normalize(titleEl.text()));
+            }
         } else {
-            Element ogTitle = doc.selectFirst("meta[property=og:title], meta[name=title]");
-            String fallbackTitle = ogTitle != null ? ogTitle.attr("content") : doc.title();
-            result.put("title", TitleTextNormalizer.normalize(fallbackTitle));
+            result.put("title", TitleTextNormalizer.normalize(doc.title()));
         }
 
         result.put("thumbnail", extractThumbnail(html));
