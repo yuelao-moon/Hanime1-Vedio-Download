@@ -1,96 +1,186 @@
 # Hanime Media Center
 
-## 1. 项目怎么使用
+本地运行的 Hanime 视频解析与下载工具。提供分类浏览、视频解析、下载队列管理、历史记录去重、失败自动重试、检测更新等功能。
 
-### 方式一：直接使用单文件 EXE
+---
 
-1. 双击 HanimeMediaCenter.exe
-2. 程序会在本机启动一个本地 Web 服务，并自动释放运行所需文件到用户目录。
-3. 启动完成后，在浏览器访问程序启动时显示的本地地址即可使用（你的IP地址:58080）。
+## 快速开始
 
-### 方式一补充：从源码生成单文件 EXE
+### 方式一：直接运行
 
-1. 确保本机安装 JDK 21+，并且系统内存在 .NET Framework C# 编译器（默认 Windows 自带）。
-2. 在项目根目录执行 `powershell -ExecutionPolicy Bypass -File "scripts/packaging/build-single-exe.ps1"`。
-3. 构建完成后会生成 `dist/HanimeMediaCenter.exe`。
-4. 双击 `dist/HanimeMediaCenter.exe` 后，程序会把运行时文件释放到 `%LOCALAPPDATA%\HanimeMediaCenter\bundle`，再自动启动应用。
+1. 从 [Releases](https://github.com/yuelao-moon/Hanime1-Vedio-Download/releases) 下载 `HanimeMediaCenter-*.exe`
+2. 双击运行，程序自动解压并启动本地 Web 服务（含内置 Java 21 运行环境）
+3. 浏览器访问启动日志中显示的地址（默认 `http://localhost:58080`）
 
-### 方式二：通过源码运行
+### 方式二：源码编译运行
 
-1. 确保本机已安装 Java 21 及以上版本。
-2. 在项目根目录执行 `mvnw.cmd spring-boot:run` 启动项目。
-3. 启动完成后，在浏览器访问程序启动日志中显示的本地地址。
+**前置条件**：JDK 21+，Maven 3.6+
 
-### 首次使用前建议确认
+```bash
+mvn spring-boot:run
+```
 
-- **系统浏览器**：项目抓取能力依赖系统中的 Edge 或 Chrome，建议本机至少安装其中一个。
-- **下载目录**：项目首次启动后会读取 `settings.json`，下载目录当前配置为 `D:\Project\AI-Project\1`，可在界面设置中修改。
-- **运行数据目录**：程序会在用户本地目录下保存配置、下载历史和浏览器缓存，用于下次继续使用。
+浏览器访问 `http://localhost:58080`。
 
-### 主要功能入口
+### 方式三：自打包 EXE
 
-- **分类浏览**：按分类抓取站点内容，查看封面、标题和分页结果。
-- **视频解析**：输入视频页面地址，解析可播放或可下载的视频源。
-- **系列视频**：在视频详情区域查看同系列条目，并支持一键加入系列下载。
-- **下载中心**：统一查看下载队列、实时进度、暂停、恢复、取消和历史记录。
-- **全局设置**：修改下载目录、清理浏览器缓存和调整本地运行状态。
+```bash
+powershell -ExecutionPolicy Bypass -File package-exe.ps1
+```
 
-### 说明
+输出到 `dist/HanimeMediaCenter.exe`（含内置 JRE 的安装程序）。
 
-- **本项目定位**：这是一个本地运行的 Web 工具，不是云端服务。
-- **配置兼容**：项目优先使用 `settings.json`，`config.json` 作为旧版兼容配置保留。
-- **端口**：程序使用的本地端口以实际启动输出为准；如果端口被占用，需根据运行日志处理。 
-- **浏览器依赖**：单文件 EXE 仍然依赖系统已安装的 Edge 或 Chrome，因为页面抓取走的是系统浏览器通道。
+---
 
-## 2. 项目使用的技术
+## 功能
+
+### 浏览与解析
+
+- **分类浏览**：按分类抓取站点内容，分页浏览封面和标题
+- **视频解析**：输入视频页面地址，解析可播放/下载的视频源
+- **系列视频**：在详情区域查看同系列条目，支持一键加入下载
+
+### 下载中心
+
+- **下载队列**：实时显示进度、速度、状态
+- **暂停/恢复/取消**：支持单个和批量操作，取消后立即进入历史记录
+- **失败自动重试**：下载失败自动重试最多 3 次，30 秒无进度也判定为超时重试
+- **历史记录**：仅保留已完成/下载失败两种标签；按标题去重，文件存在则覆盖为已完成
+- **全部重试**：一键重试所有失败任务
+
+### 设置
+
+- **下载目录**：自定义视频保存路径
+- **并发控制**：调整最大同时下载数
+- **缓存清理**：清除浏览器抓取缓存
+- **检查更新**：从 GitHub Release 检查新版本
+
+### 视觉优化
+
+- **封面智能显示**：自动检测图片横竖方向，横图铺满宽度，竖图自适应高度
+- **状态标签简化**：历史中只保留"已完成"（绿）和"下载失败"（按钮可重试）
+
+---
+
+## 技术栈
 
 ### 前端
 
-- **原生 HTML / CSS / JavaScript**：前端代码位于 `src/main/resources/static/`，由 `index.html`、`style.css`、`app.js` 组成，负责分类浏览、视频解析、系列视频展示、下载中心、设置面板等界面与交互。
-- **Hls.js**：在 `src/main/resources/static/index.html` 中通过 CDN 引入，用于前端播放和处理 `m3u8` 流媒体资源。
-- **Google Fonts（Inter）**：在 `index.html` 中引入，用于页面字体展示，属于界面层资源。
-- **前端框架：未使用**：当前项目没有使用 Vue、React、Angular 等前端框架，页面交互全部基于原生 JavaScript 实现。
-- **UI 库：未使用**：当前项目没有引入 Element、Ant Design、Bootstrap、Vuetify 等 UI 组件库，界面样式为项目自定义实现。
+- 原生 HTML / CSS / JavaScript（无框架）
+- Hls.js（m3u8 流播放）
+- 自定义玻璃态 UI 风格
 
 ### 后端
 
-- **Java 21**：在 `pom.xml` 中声明为项目运行语言版本，是整个后端服务、下载调度和页面抓取逻辑的基础运行环境。
-- **Spring Boot 3.2.4**：项目核心后端框架，负责应用启动、依赖注入、静态资源托管以及 Web API 能力。
-- **Spring MVC / REST API**：通过 `spring-boot-starter-web` 提供接口能力，承担视频解析、分类抓取、下载任务、设置管理等 HTTP 接口。
-- **SSE（Spring `SseEmitter`）**：在 `DownloadService` 中用于向前端实时推送下载进度、任务状态和历史记录变化。
-- **Java 并发工具链**：项目在下载队列和浏览器访问控制中使用 `ExecutorService`、`BlockingQueue`、`ConcurrentHashMap`、`CopyOnWriteArrayList`、`ReentrantLock` 等并发能力，用于实现任务排队、状态管理和串行化抓取。
+- **Java 21** + **Spring Boot 3.2.4**
+- **Playwright for Java**：驱动系统 Edge/Chrome 浏览器，处理 Cloudflare 验证
+- **Jsoup**：从抓取的 HTML 中提取结构化数据
+- **SSE (SseEmitter)**：实时推送下载进度
 
-### 页面抓取与解析
+### 下载引擎
 
-- **Playwright for Java**：在 `pom.xml` 中引入 `com.microsoft.playwright:playwright`，由 `PlaywrightBrowserService` 负责驱动浏览器访问目标站点、处理 Cloudflare 验证、抓取页面内容和下载页资源。
-- **系统浏览器通道（Edge / Chrome）**：`PlaywrightBrowserService` 中优先使用 `msedge`，失败后回退 `chrome`，用于在不内置完整浏览器内核的前提下完成站点抓取。
-- **Jsoup**：在 `pom.xml` 中引入 `org.jsoup:jsoup`，用于从抓取后的 HTML 中提取标题、封面、系列列表、分类卡片和下载链接等结构化信息。
-- **Java `HttpClient`**：在下载相关逻辑中用于直接请求资源地址和处理下载过程中的网络访问。
+- 任务队列（`LinkedBlockingQueue` + `ConcurrentHashMap`）
+- 多线程并行下载（12 workers）
+- 超时看门狗（30 秒无进度自动重试）
+- 文件存在性校验（`Files.exists + Files.size > 0`）
+- 断点续传（清理部分文件后重试）
 
-### 下载与文件处理
+### 打包
 
-- **本地文件系统存储**：项目没有接入云存储或对象存储，下载文件直接保存到本地目录，下载路径由 `settings.json` / `config.json` 配置。
-- **下载任务队列**：`DownloadService` 负责维护下载队列、活动任务、历史记录和批量加入下载逻辑。
-- **分段下载与流媒体下载能力**：从 `SegmentedFileDownloaderTest`、`HlsDownloaderTest`、`DownloadService` 可以看出，项目同时覆盖普通文件下载与 HLS 资源下载场景。
-- **本地 JSON 历史记录**：`download-history.json` 用于持久化下载历史，不依赖数据库。
+- **Maven**：项目构建
+- **jlink**：创建最小 JRE
+- **jpackage**：生成 Windows 安装程序（含内置 JRE，~50MB）
 
-### 配置与应用数据
+---
 
-- **JSON 配置文件**：`settings.json` 用于保存当前设置，`config.json` 用于兼容旧版配置格式。
-- **应用数据目录管理**：项目通过 `AppPaths` 统一管理配置文件、下载历史、Playwright 数据目录等运行时文件位置，避免直接依赖源码目录。
-- **Jackson**：随 Spring Boot Web 引入，实际用于配置文件读写、接口 JSON 序列化和下载历史持久化。
+## 项目结构
 
-### 测试工具
+```
+src/main/java/com/wangver/hanime/
+├── controller/
+│   └── ApiController.java          # REST API 入口
+│   └── DownloadController.java     # 下载相关端点
+├── service/
+│   ├── DownloadService.java        # 下载队列、重试、超时、历史去重
+│   ├── HanimeParserService.java    # 视频解析、Playwright 抓取
+│   ├── PlaywrightBrowserService.java # 浏览器管理
+│   ├── SettingsManager.java        # 配置读写
+│   ├── AppVersion.java             # 版本号 + GitHub 仓库信息
+│   └── ...
+├── model/
+│   ├── DownloadTaskView.java       # 下载任务视图
+│   ├── DownloadStatus.java         # 状态枚举
+│   ├── AppSettings.java            # 设置模型
+│   └── ...
+└── resource/static/
+    ├── index.html                  # 主页面
+    ├── app.js                      # 前端交互逻辑
+    └── style.css                   # 界面样式
+```
 
-- **JUnit 5**：通过 `spring-boot-starter-test` 使用，覆盖浏览抓取、视频解析、下载服务、配置管理、控制器等模块。
-- **Spring Boot Test**：用于后端接口与 Spring 容器相关测试。
-- **Mockito**：用于服务层和浏览器层的 mock 测试，验证抓取、解析、下载调度等逻辑分支。
-- **Maven Surefire Plugin**：在 `pom.xml` 中配置，用于执行单元测试与集成测试。
+---
 
-### 构建与工程化
+## 关键特性说明
 
-- **Maven**：项目主构建工具，负责依赖管理、测试执行和打包。
-- **Maven Wrapper**：仓库中的 `mvnw`、`mvnw.cmd`、`.mvn/` 用于在不同机器上统一 Maven 构建环境。
-- **Spring Boot Maven Plugin**：用于生成可运行的 Spring Boot fat jar。
-- **Lombok**：在 `pom.xml` 中声明为可选依赖，用于减少样板代码；当前代码中是否大量使用，待确认。
-- **Windows 单文件 EXE 分发产物**：项目当前支持打包为单文件 Windows 可执行程序，用于脱离源码目录直接运行；具体打包链路在当前仓库快照中为项目内定制流程。
+### 下载重试机制
+
+```
+下载异常/超时
+  ├─ retryCount < 3 → QUEUED → 重新入队
+  │   errorMessage: "下载失败/超时，第N次重试中"
+  └─ retryCount >= 3 → FAILED → 进入历史记录
+      errorMessage: "已重试3次，下载失败/超时"
+```
+
+- 网络波动、Cloudflare 拦截、服务器超时均会触发重试
+- 重试前自动清理残留的部分文件
+- 30 秒进度看门狗：进度无变化超过 30 秒自动触发重试
+
+### 历史记录去重
+
+```
+每次添加记录或打开下载中心时:
+  1. 按标题分组
+  2. 检查文件是否实际存在于磁盘
+     ├─ 存在 → 覆盖为 COMPLETED
+     └─ 不存在 → 优先保留 FAILED（显示错误信息）
+  3. 同一标题只保留一条记录
+```
+
+### 检测更新
+
+- 通过 GitHub Releases API 检查版本
+- 设置面板中点击"检查更新"
+- 后端自动对比版本号，有更新则显示下载链接
+
+---
+
+## 版本号维护
+
+发新版时需同步修改两处：
+
+| 文件 | 位置 |
+|------|------|
+| `src/main/java/.../AppVersion.java` | `VERSION = "1.0.0"` |
+| `pom.xml` | `<version>1.0.0-SNAPSHOT</version>` |
+
+然后在 GitHub 创建 Release（tag 格式 `v1.1.0`），用户即可通过"检查更新"检测到。
+
+---
+
+## 本地数据目录
+
+程序运行数据保存在 `%LOCALAPPDATA%\HanimeMediaCenter\`：
+
+- `settings.json` — 用户配置（下载目录、并发数等）
+- `download-history.json` — 下载历史
+- `bundle/` — EXE 自解压的运行时文件
+- `playwright-data/` — 浏览器缓存
+
+---
+
+## 免责声明
+
+- 本项目是一个**本地运行的个人工具**，不是云端服务
+- 抓取能力依赖系统已安装的 Edge 或 Chrome 浏览器
+- 仅用于个人学习和研究，请遵守目标网站的使用条款
