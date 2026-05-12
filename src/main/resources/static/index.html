@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hanime Media Center</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=1.5">
+    <link rel="stylesheet" href="style.css?v=2.3">
     <!-- Include HLS.js for streaming m3u8 videos -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
@@ -20,6 +20,24 @@
             <span class="logo-h">H</span>anime<span class="logo-web">Center</span>
         </div>
         <div class="nav-actions">
+            <div class="global-search-shell collapsed" id="globalSearch">
+                <button class="global-search-icon" id="globalSearchExpandBtn" type="button" title="展开搜索">⌕</button>
+                <select id="globalSearchTypeSelect" class="global-search-type" title="搜索类型">
+                    <option value="">全部类型</option>
+                    <option value="裏番">裏番</option>
+                    <option value="泡麵番">泡麵番</option>
+                    <option value="Motion Anime">Motion Anime</option>
+                    <option value="3DCG">3DCG</option>
+                    <option value="2.5D">2.5D</option>
+                    <option value="2D動畫">2D動畫</option>
+                    <option value="AI生成">AI生成</option>
+                    <option value="MMD">MMD</option>
+                    <option value="Cosplay">Cosplay</option>
+                </select>
+                <input type="text" id="globalSearchInput" placeholder="搜索关键词">
+                <button class="global-filter-btn" id="globalFilterBtn" type="button" title="高级筛选">筛选</button>
+                <button class="global-search-submit" id="globalSearchSubmitBtn" type="button" title="搜索">搜索</button>
+            </div>
             <button class="queue-nav-btn" id="downloadCenterBtn" title="查看下载中心">
                 <span>下载中心</span>
                 <span class="nav-pill" id="downloadBadge">0</span>
@@ -70,6 +88,57 @@
                 <main class="grid-content">
                     <div class="grid-header">
                         <h2 id="currentCategoryTitle">最新 里番</h2>
+                        <div class="browse-search-toolbar" id="browseSearchToolbar">
+                            <select id="browseSearchTypeSelect" title="搜索类型">
+                                <option value="">全部类型</option>
+                                <option value="裏番">裏番</option>
+                                <option value="泡麵番">泡麵番</option>
+                                <option value="Motion Anime">Motion Anime</option>
+                                <option value="3DCG">3DCG</option>
+                                <option value="2.5D">2.5D</option>
+                                <option value="2D動畫">2D動畫</option>
+                                <option value="AI生成">AI生成</option>
+                                <option value="MMD">MMD</option>
+                                <option value="Cosplay">Cosplay</option>
+                            </select>
+                            <button class="browse-filter-button" id="browseSearchTagBtn" type="button">标签</button>
+                            <select id="browseSearchSortSelect" title="排序方式">
+                                <option value="">排序方式</option>
+                                <option value="最新上市">最新上市</option>
+                                <option value="最新上傳">最新上傳</option>
+                                <option value="本日排行">本日排行</option>
+                                <option value="本周排行">本周排行</option>
+                                <option value="本月排行">本月排行</option>
+                                <option value="觀看次數">觀看次數</option>
+                                <option value="點讚比例">點讚比例</option>
+                                <option value="時長最長">時長最長</option>
+                                <option value="他們在看">他們在看</option>
+                            </select>
+                            <select id="browseSearchDateSelect" title="发布日期">
+                                <option value="">发布日期</option>
+                                <option value="過去 24 小時">過去 24 小時</option>
+                                <option value="過去 2 天">過去 2 天</option>
+                                <option value="過去 1 周">過去 1 周</option>
+                                <option value="過去 1 個月">過去 1 個月</option>
+                                <option value="過去 3 個月">過去 3 個月</option>
+                                <option value="過去 1 年">過去 1 年</option>
+                            </select>
+                            <select id="browseSearchDurationSelect" title="时长">
+                                <option value="">时长</option>
+                                <option value="1 分鐘 +">1 分鐘 +</option>
+                                <option value="5 分鐘 +">5 分鐘 +</option>
+                                <option value="10 分鐘 +">10 分鐘 +</option>
+                                <option value="20 分鐘 +">20 分鐘 +</option>
+                                <option value="30 分鐘 +">30 分鐘 +</option>
+                                <option value="60 分鐘 +">60 分鐘 +</option>
+                                <option value="0 - 10 分鐘">0 - 10 分鐘</option>
+                                <option value="0 - 20 分鐘">0 - 20 分鐘</option>
+                            </select>
+                            <div class="browse-search-input-wrap">
+                                <input type="text" id="browseSearchInput" placeholder="搜索">
+                                <button id="browseSearchSubmitBtn" type="button" title="搜索">⌕</button>
+                            </div>
+                        </div>
                         <div class="browse-actions">
                             <div class="selection-chip">本页已选 <span id="browseSelectionCount">0</span> 项</div>
                             <div class="browse-batch-actions">
@@ -216,12 +285,62 @@
                 <small class="help-text">设置后，后端的发起的原生多任务下载将自动保存至此文件夹。</small>
             </div>
 
+            <div class="form-group">
+                <label for="maxConcurrentDownloads">并行下载数量</label>
+                <input type="number" id="maxConcurrentDownloads" min="1" max="12" step="1" placeholder="3" style="width: 100%;">
+                <small class="help-text">同时执行的下载任务数，默认 3。数值过高可能导致站点限速或本机网络拥塞。</small>
+            </div>
+
             <div class="action-bar" style="justify-content: space-between; margin-top: 2rem; margin-bottom: 0;">
                 <button class="btn-secondary" id="clearCacheBtn" title="清除浏览器记忆并重启抓取引擎" style="background: rgba(255, 100, 100, 0.1); border-color: rgba(255, 100, 100, 0.3); color: #ff6b6b;">🧹 清除本地缓存</button>
                 <div style="display: flex; gap: 10px;">
                     <button class="btn-secondary" id="closeSettingsBtn">取消</button>
                     <button class="btn-primary" id="saveSettingsBtn">💾 保存设定</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal hidden" id="searchFilterModal">
+        <div class="modal-content search-filter-modal text-left">
+            <div class="search-filter-header">
+                <div>
+                    <h2>高级搜索筛选</h2>
+                    <p>组合类型、标签、排序、发布日期和时长后显示搜索结果</p>
+                </div>
+                <button class="btn-secondary" id="closeSearchFilterBtn" type="button">关闭</button>
+            </div>
+
+            <div class="search-filter-grid">
+                <div class="form-group">
+                    <label for="searchTypeSelect">类型</label>
+                    <select id="searchTypeSelect"></select>
+                </div>
+                <div class="form-group">
+                    <label for="searchGenreSelect">分类</label>
+                    <select id="searchGenreSelect"></select>
+                </div>
+                <div class="form-group">
+                    <label for="searchSortSelect">排序方式</label>
+                    <select id="searchSortSelect"></select>
+                </div>
+                <div class="form-group">
+                    <label for="searchDateSelect">发布日期</label>
+                    <select id="searchDateSelect"></select>
+                </div>
+                <div class="form-group">
+                    <label for="searchDurationSelect">时长</label>
+                    <select id="searchDurationSelect"></select>
+                </div>
+            </div>
+
+            <div class="search-tags-panel" id="searchTagsPanel">
+                <div class="download-empty">正在载入筛选标签...</div>
+            </div>
+
+            <div class="action-bar search-filter-actions">
+                <button class="btn-secondary" id="resetSearchFiltersBtn" type="button">清空筛选</button>
+                <button class="btn-primary" id="applySearchFiltersBtn" type="button">显示搜索结果</button>
             </div>
         </div>
     </div>
@@ -233,7 +352,11 @@
                     <h2>下载中心</h2>
                     <p id="downloadCenterSummary">实时查看任务队列、进度和历史记录</p>
                 </div>
-                <button class="btn-secondary" id="closeDownloadCenterBtn">关闭</button>
+                <div class="download-center-controls">
+                    <button class="download-action-btn" id="pauseAllDownloadsBtn" type="button">全部暂停</button>
+                    <button class="download-action-btn danger" id="cancelAllDownloadsBtn" type="button">全部取消</button>
+                    <button class="btn-secondary" id="closeDownloadCenterBtn">关闭</button>
+                </div>
             </div>
 
             <div class="download-center-grid">
@@ -251,6 +374,7 @@
                     <div class="download-board-header">
                         <h3>历史记录</h3>
                         <div class="download-board-actions">
+                            <button class="download-action-btn" id="retryAllFailedBtn" type="button">重试所有失败</button>
                             <button class="download-action-btn" id="clearDownloadHistoryBtn" type="button">清空历史</button>
                             <span class="badge" id="downloadHistoryCount">0</span>
                         </div>
@@ -263,6 +387,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=1.5"></script>
+    <script src="app.js?v=2.3"></script>
 </body>
 </html>

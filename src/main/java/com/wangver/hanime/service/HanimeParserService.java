@@ -82,24 +82,36 @@ public class HanimeParserService {
                         new Page.WaitForSelectorOptions().setTimeout(20000));
 
                 String html = page.content();
-                String downloadHtml = null;
+                String downloadUrl = null;
 
                 if (videoId != null && !videoId.isBlank()) {
                     try {
-                        page.navigate("https://hanime1.me/download?v=" + videoId);
-                        page.waitForSelector("table.download-table a[data-url], a[data-url]",
-                                new Page.WaitForSelectorOptions().setTimeout(10000));
-                        downloadHtml = page.content();
+                        downloadUrl = fetchFirstDownloadUrlWithPlaywright(page, videoId);
                     } catch (Exception e) {
                         System.out.println("下载页获取失败: " + e.getMessage());
                     }
                 }
 
-                return buildParseResult(url, html, downloadHtml);
+                return buildParseResult(url, html, null, downloadUrl);
             } finally {
                 closePageQuietly(page);
             }
         });
+    }
+
+    private String fetchFirstDownloadUrlWithPlaywright(Page page, String videoId) {
+        page.navigate("https://hanime1.me/download?v=" + videoId,
+                new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(60000));
+        ElementHandle downloadButton = page.waitForSelector("table.download-table a[data-url], a[data-url]",
+                new Page.WaitForSelectorOptions().setTimeout(10000));
+        if (downloadButton == null) {
+            return null;
+        }
+        String url = downloadButton.getAttribute("data-url");
+        if (url == null || url.isBlank() || url.toLowerCase(Locale.ROOT).contains("juicyads")) {
+            return null;
+        }
+        return url.replace("&amp;", "&");
     }
 
     private void closePageQuietly(Page page) {
@@ -110,9 +122,13 @@ public class HanimeParserService {
     }
 
     private Map<String, Object> buildParseResult(String url, String html, String downloadHtml) {
+        return buildParseResult(url, html, downloadHtml, null);
+    }
+
+    private Map<String, Object> buildParseResult(String url, String html, String downloadHtml, String directDownloadUrl) {
         Map<String, Object> result = new HashMap<>();
-        String videoUrl = null;
-        if (downloadHtml != null && !downloadHtml.isBlank()) {
+        String videoUrl = directDownloadUrl;
+        if ((videoUrl == null || videoUrl.isBlank()) && downloadHtml != null && !downloadHtml.isBlank()) {
             videoUrl = extractFirstStream(downloadHtml);
         }
         if (videoUrl == null || videoUrl.isBlank()) {

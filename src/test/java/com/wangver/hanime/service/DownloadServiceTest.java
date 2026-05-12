@@ -32,6 +32,9 @@ class DownloadServiceTest {
     @Test
     void processesQueuedTasksInOrderAndMovesThemToHistory() throws Exception {
         SettingsManager settingsManager = createSettingsManager(tempDir.resolve("downloads"));
+        AppSettings settings = settingsManager.getSettings();
+        settings.setMaxConcurrentDownloads(1);
+        settingsManager.saveSettings(settings);
         DownloadHistoryStore historyStore = new DownloadHistoryStore(tempDir.resolve("download-history.json"), objectMapper);
         CountDownLatch completed = new CountDownLatch(2);
         List<String> executionOrder = new CopyOnWriteArrayList<>();
@@ -238,6 +241,9 @@ class DownloadServiceTest {
     @Test
     void cancelsQueuedTaskBeforeItStarts() throws Exception {
         SettingsManager settingsManager = createSettingsManager(tempDir.resolve("downloads"));
+        AppSettings settings = settingsManager.getSettings();
+        settings.setMaxConcurrentDownloads(1);
+        settingsManager.saveSettings(settings);
         DownloadHistoryStore historyStore = new DownloadHistoryStore(tempDir.resolve("download-history.json"), objectMapper);
         CountDownLatch blocker = new CountDownLatch(1);
         AtomicBoolean secondTaskRan = new AtomicBoolean(false);
@@ -290,6 +296,141 @@ class DownloadServiceTest {
             assertEquals(false, secondTaskRan.get());
         } finally {
             blocker.countDown();
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void startsThreeDownloadsInParallelByDefault() throws Exception {
+        SettingsManager settingsManager = createSettingsManager(tempDir.resolve("downloads"));
+        DownloadHistoryStore historyStore = new DownloadHistoryStore(tempDir.resolve("download-history.json"), objectMapper);
+        CountDownLatch started = new CountDownLatch(3);
+        CountDownLatch release = new CountDownLatch(1);
+
+        LocalCoverService localCoverService = createLocalCoverService();
+        DownloadService service = new DownloadService(
+                settingsManager,
+                historyStore,
+                localCoverService,
+                this::resolved,
+                (resolvedDownload, targetFile, progressConsumer, control) -> {
+                    started.countDown();
+                    release.await(5, TimeUnit.SECONDS);
+                    Files.writeString(targetFile, resolvedDownload.title());
+                    progressConsumer.accept(new DownloadProgress(1, 1));
+                }
+        );
+
+        try {
+            DownloadBatchRequest request = new DownloadBatchRequest();
+            request.setItems(List.of(
+                    item("并行任务 1", null, "https://media.example.com/1.mp4"),
+                    item("并行任务 2", null, "https://media.example.com/2.mp4"),
+                    item("并行任务 3", null, "https://media.example.com/3.mp4"),
+                    item("并行任务 4", null, "https://media.example.com/4.mp4")
+            ));
+
+            service.enqueue(request);
+
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertTrue(waitUntil(() -> service.getSnapshot().activeTasks().size() == 3));
+            assertEquals(1, service.getSnapshot().queuedTasks().size());
+        } finally {
+            release.countDown();
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void honorsConfiguredParallelDownloadLimit() throws Exception {
+        SettingsManager settingsManager = createSettingsManager(tempDir.resolve("downloads"));
+        AppSettings settings = settingsManager.getSettings();
+        settings.setMaxConcurrentDownloads(2);
+        settingsManager.saveSettings(settings);
+        DownloadHistoryStore historyStore = new DownloadHistoryStore(tempDir.resolve("download-history.json"), objectMapper);
+        CountDownLatch started = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+
+        LocalCoverService localCoverService = createLocalCoverService();
+        DownloadService service = new DownloadService(
+                settingsManager,
+                historyStore,
+                localCoverService,
+                this::resolved,
+                (resolvedDownload, targetFile, progressConsumer, control) -> {
+                    started.countDown();
+                    release.await(5, TimeUnit.SECONDS);
+                    Files.writeString(targetFile, resolvedDownload.title());
+                    progressConsumer.accept(new DownloadProgress(1, 1));
+                }
+        );
+
+        try {
+            DownloadBatchRequest request = new DownloadBatchRequest();
+            request.setItems(List.of(
+                    item("限制任务 1", null, "https://media.example.com/1.mp4"),
+                    item("限制任务 2", null, "https://media.example.com/2.mp4"),
+                    item("限制任务 3", null, "https://media.example.com/3.mp4")
+            ));
+
+            service.enqueue(request);
+
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertTrue(waitUntil(() -> service.getSnapshot().activeTasks().size() == 2));
+            assertEquals(1, service.getSnapshot().queuedTasks().size());
+        } finally {
+            release.countDown();
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void pausesAndCancelsAllLiveTasks() throws Exception {
+        SettingsManager settingsManager = createSettingsManager(tempDir.resolve("downloads"));
+        DownloadHistoryStore historyStore = new DownloadHistoryStore(tempDir.resolve("download-history.json"), objectMapper);
+        CountDownLatch started = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+
+        LocalCoverService localCoverService = createLocalCoverService();
+        DownloadService service = new DownloadService(
+                settingsManager,
+                historyStore,
+                localCoverService,
+                this::resolved,
+                (resolvedDownload, targetFile, progressConsumer, control) -> {
+                    started.countDown();
+                    progressConsumer.accept(new DownloadProgress(1, 10));
+                    release.await(5, TimeUnit.SECONDS);
+                    control.throwIfCancelled();
+                    Files.writeString(targetFile, resolvedDownload.title());
+                }
+        );
+
+        try {
+            DownloadBatchRequest request = new DownloadBatchRequest();
+            request.setItems(List.of(
+                    item("批量任务 1", null, "https://media.example.com/1.mp4"),
+                    item("批量任务 2", null, "https://media.example.com/2.mp4"),
+                    item("批量任务 3", null, "https://media.example.com/3.mp4")
+            ));
+
+            service.enqueue(request);
+
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            DownloadSnapshot paused = service.pauseAll();
+            assertEquals(3, paused.activeTasks().size() + paused.queuedTasks().size());
+            assertTrue(paused.activeTasks().stream().allMatch(task -> task.getStatus() == DownloadStatus.PAUSED));
+            assertTrue(paused.queuedTasks().stream().allMatch(task -> task.getStatus() == DownloadStatus.PAUSED));
+
+            DownloadSnapshot cancelled = service.cancelAll();
+            assertEquals(0, cancelled.queuedTasks().size());
+
+            release.countDown();
+            assertTrue(waitUntil(() -> service.getSnapshot().historyTasks().stream()
+                    .filter(task -> task.getStatus() == DownloadStatus.CANCELLED)
+                    .count() == 3));
+        } finally {
+            release.countDown();
             service.shutdown();
         }
     }
@@ -393,6 +534,16 @@ class DownloadServiceTest {
         return new LocalCoverService(tempDir.resolve("covers"), null, null);
     }
 
+    private DownloadService.ResolvedDownload resolved(DownloadRequestItem request) {
+        return new DownloadService.ResolvedDownload(
+                request.getTitle(),
+                request.getPageUrl(),
+                request.getDownloadUrl(),
+                request.getThumbnail(),
+                request.getTitle() + ".mp4"
+        );
+    }
+
     private SettingsManager createSettingsManager(Path downloadDirectory) {
         SettingsManager settingsManager = new SettingsManager(
                 tempDir.resolve("settings.json"),
@@ -410,7 +561,7 @@ class DownloadServiceTest {
         item.setTitle(title);
         item.setPageUrl(pageUrl);
         item.setDownloadUrl(downloadUrl);
-        item.setThumbnail("https://image.example.com/thumb.jpg");
+        item.setThumbnail("");
         return item;
     }
 

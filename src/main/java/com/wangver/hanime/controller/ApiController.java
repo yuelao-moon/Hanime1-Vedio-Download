@@ -20,6 +20,7 @@ import com.wangver.hanime.service.DownloadService;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -107,6 +108,40 @@ public class ApiController {
             e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("获取分类失败: " + e.getMessage());
         }
+    }
+
+    @GetMapping("/search")
+    public ResponseEntity<?> search(
+            @RequestParam(required = false, defaultValue = "") String query,
+            @RequestParam(required = false, defaultValue = "") String type,
+            @RequestParam(required = false, defaultValue = "") String genre,
+            @RequestParam(name = "tags[]", required = false) List<String> tags,
+            @RequestParam(required = false, defaultValue = "") String sort,
+            @RequestParam(required = false, defaultValue = "") String date,
+            @RequestParam(required = false, defaultValue = "") String duration,
+            @RequestParam(defaultValue = "1") int page) {
+        try {
+            return ResponseEntity.ok(browseService.fetchSearch(
+                    query,
+                    type,
+                    genre,
+                    tags == null ? List.of() : tags,
+                    sort,
+                    date,
+                    duration,
+                    page
+            ));
+        } catch (HttpSessionExpiredException e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("搜索失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/search/options")
+    public ResponseEntity<?> searchOptions() {
+        return ResponseEntity.ok(browseService.fetchSearchOptions());
     }
 
     /**

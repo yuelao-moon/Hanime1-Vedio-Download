@@ -52,4 +52,22 @@ class SettingsManagerTest {
         AppSettings migrated = objectMapper.readValue(settingsFile.toFile(), AppSettings.class);
         assertEquals("F:/Legacy/Hanime", migrated.getDownloadDirectory());
     }
+
+    @Test
+    void defaultsParallelDownloadsToThreeAndPersistsUpdates() throws Exception {
+        Path settingsFile = tempDir.resolve("settings.json");
+        Path legacyFile = tempDir.resolve("config.json");
+
+        SettingsManager manager = new SettingsManager(settingsFile, legacyFile, objectMapper);
+        manager.init();
+
+        assertEquals(3, manager.getSettings().getMaxConcurrentDownloads());
+
+        AppSettings updated = manager.getSettings();
+        updated.setMaxConcurrentDownloads(5);
+        manager.saveSettings(updated);
+
+        AppSettings persisted = objectMapper.readValue(settingsFile.toFile(), AppSettings.class);
+        assertEquals(5, persisted.getMaxConcurrentDownloads());
+    }
 }
