@@ -7,6 +7,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const saveSettingsBtn = document.getElementById("saveSettingsBtn");
     const downloadDirInput = document.getElementById("downloadDir");
     const maxConcurrentDownloadsInput = document.getElementById("maxConcurrentDownloads");
+    
+    // Gopeed & Browser Settings
+    const gopeedHostInput = document.getElementById("gopeedHost");
+    const gopeedPortInput = document.getElementById("gopeedPort");
+    const gopeedTokenInput = document.getElementById("gopeedToken");
+    const gopeedConnectionsInput = document.getElementById("gopeedConnections");
+    const browserChannelSelect = document.getElementById("browserChannel");
+    const browserVerificationTimeoutSecondsInput = document.getElementById("browserVerificationTimeoutSeconds");
+
     const downloadCenterBtn = document.getElementById("downloadCenterBtn");
     const downloadBadge = document.getElementById("downloadBadge");
     const downloadCenterModal = document.getElementById("downloadCenterModal");
@@ -65,6 +74,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const mainTitle = document.getElementById("mainTitle");
     const mainCover = document.getElementById("mainCover");
+    const creatorInfoCard = document.getElementById("creatorInfoCard");
+    const creatorAvatar = document.getElementById("creatorAvatar");
+    const creatorName = document.getElementById("creatorName");
+    const userProfileHeader = document.getElementById("userProfileHeader");
     const playlistContainer = document.getElementById("playlistContainer");
     const playlistCount = document.getElementById("playlistCount");
     const relatedVideosSection = document.getElementById("relatedVideosSection");
@@ -84,9 +97,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentVideoUrl = "";
     let currentRawVideoUrl = "";
+    let currentProxiedVideoUrl = "";
+    let currentVideoFallbackTried = false;
     let hlsInstance = null; // hls.js instance
     let currentView = 'viewLanding';
-    let currentCategory = '裏番';
+    let currentCategory = '首页';
     let currentBrowseMode = 'category';
     let currentPage = 1;
     let currentSearchState = {
@@ -108,6 +123,9 @@ document.addEventListener("DOMContentLoaded", () => {
     let downloadReconnectTimer = null;
     let cfModalTimer = null;
     const selectedBrowseItems = new Map();
+    let currentHomeSections = [];
+    let currentHomeHero = null;
+    let currentCreatorData = null; // Cache last successful creator page data
 
     // ---- Logging ----
     function log(message, type = "info") {
@@ -130,6 +148,43 @@ document.addEventListener("DOMContentLoaded", () => {
             '"': '&quot;',
             "'": '&#39;'
         }[char]));
+    }
+
+    function proxyImageUrl(url) {
+        return url ? `/api/proxy/image?url=${encodeURIComponent(url)}` : "";
+    }
+
+    function imageUrl(url) {
+        return proxyImageUrl(url);
+    }
+
+    function directMediaUrl(url) {
+        return url || "";
+    }
+
+    function proxyVideoUrl(url) {
+        return url ? `/api/proxy/video?url=${encodeURIComponent(url)}` : "";
+    }
+
+    window.fallbackImage = (img) => {
+        const rawUrl = img?.dataset?.srcRaw;
+        if (!img || !rawUrl || img.dataset.proxyTried === "1") return;
+        img.dataset.proxyTried = "1";
+        img.src = proxyImageUrl(rawUrl);
+    };
+
+    function preloadCurrentVideo() {
+        if (!currentVideoUrl || currentVideoUrl.includes(".m3u8")) return;
+        if (currentVideoUrl === currentRawVideoUrl) return;
+        playerWrapper.classList.remove("hidden");
+        playerWrapper.classList.add("preloading");
+        videoPlayer.onerror = null;
+        videoPlayer.preload = "metadata";
+        if (videoPlayer.dataset.src !== currentVideoUrl) {
+            videoPlayer.dataset.src = currentVideoUrl;
+            videoPlayer.src = currentVideoUrl;
+            videoPlayer.load();
+        }
     }
 
     function normalizeSearchState(state = {}) {
@@ -345,22 +400,501 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function applyBrowseResult(data) {
         const totalPagesIndicatorStr = document.getElementById('totalPagesIndicatorStr');
-        currentBrowseVideos = Array.isArray(data.videos) ? data.videos : [];
+        const paginationBar = document.getElementById('paginationBar');
         selectedBrowseItems.clear();
         updateBrowseSelectionSummary();
         browseLoader.classList.add("hidden");
-        renderVideoGrid(currentBrowseVideos);
 
-        if (data.totalPages && totalPagesIndicatorStr) {
-            totalPagesIndicatorStr.innerText = `/ ${data.totalPages}`;
-            if (nextPageBtn) {
-                nextPageBtn.disabled = (currentPage >= data.totalPages);
+        if (userProfileHeader) {
+            userProfileHeader.classList.add("hidden");
+        }
+        if (currentCategoryTitle) currentCategoryTitle.classList.remove("hidden");
+        if (browseSearchToolbar) browseSearchToolbar.classList.remove("hidden");
+
+        if (data.isHome) {
+            currentHomeSections = data.sections || [];
+            currentHomeHero = data.hero || null;
+            currentBrowseVideos = [];
+            currentHomeSections.forEach(sec => {
+                if (Array.isArray(sec.videos)) {
+                    currentBrowseVideos.push(...sec.videos);
+                }
+            });
+            videoGrid.classList.add("home-layout");
+            if (browseSearchToolbar) browseSearchToolbar.classList.add("hidden");
+            if (paginationBar) paginationBar.classList.add("hidden");
+            renderHomeSections(currentHomeSections, currentHomeHero);
+        } else if (data.isCreatorPage) {
+            currentHomeSections = [];
+            currentHomeHero = null;
+            currentBrowseVideos = Array.isArray(data.videos) ? data.videos : [];
+            videoGrid.classList.remove("home-layout");
+            if (currentCategoryTitle) currentCategoryTitle.classList.add("hidden");
+            if (browseSearchToolbar) browseSearchToolbar.classList.add("hidden");
+            if (paginationBar) paginationBar.classList.remove("hidden");
+
+            // Cache creator data for optimistic UI updates on subsequent tab/sort clicks
+            currentCreatorData = {
+                creatorAvatar: data.creatorAvatar,
+                creatorName: data.creatorName,
+                creatorId: data.creatorId,
+                creatorStats: data.creatorStats
+            };
+
+            renderCreatorHeader(currentCategory);
+            renderVideoGrid(currentBrowseVideos);
+        } else if (data.isPlaylistPage) {
+            currentHomeSections = [];
+            currentHomeHero = null;
+            currentBrowseVideos = Array.isArray(data.videos) ? data.videos : [];
+            videoGrid.classList.remove("home-layout");
+            if (currentCategoryTitle) currentCategoryTitle.classList.add("hidden");
+            if (browseSearchToolbar) browseSearchToolbar.classList.add("hidden");
+            if (paginationBar) paginationBar.classList.remove("hidden");
+
+            if (userProfileHeader) {
+                userProfileHeader.style.setProperty('--avatar-url', 'none');
+                userProfileHeader.innerHTML = `
+                    <div class="playlist-rows-wrapper" style="background: rgba(20, 20, 26, 0.7); backdrop-filter: blur(10px);">
+                        <div class="profile-main-container">
+                            <div class="profile-content-right">
+                                <h1 class="profile-display-name">${escapeHtml(data.playlistTitle)}</h1>
+                                <div class="profile-sub-stats">
+                                    <span class="profile-sub-stats-new-line">播放清單 • 創作者: 
+                                        <button class="creator-link-btn" style="background: none; border: none; color: var(--primary, #ff4b4b); cursor: pointer; padding: 0; font-weight: 600; font-size: inherit; text-decoration: underline;">
+                                            ${escapeHtml(data.creatorName || "未知")}
+                                        </button>
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                userProfileHeader.classList.remove("hidden");
+
+                const backBtn = userProfileHeader.querySelector(".creator-link-btn");
+                if (backBtn && data.creatorId) {
+                    backBtn.onclick = () => {
+                        loadBrowseCategory("user:" + data.creatorId, 1, true);
+                    };
+                }
             }
-        } else if (totalPagesIndicatorStr) {
-            totalPagesIndicatorStr.innerText = "";
-            if (nextPageBtn) {
-                nextPageBtn.disabled = false;
+
+            renderVideoGrid(currentBrowseVideos);
+
+            if (data.totalPages && totalPagesIndicatorStr) {
+                totalPagesIndicatorStr.innerText = `/ ${data.totalPages}`;
+                if (nextPageBtn) {
+                    nextPageBtn.disabled = (currentPage >= data.totalPages);
+                }
+            } else if (totalPagesIndicatorStr) {
+                totalPagesIndicatorStr.innerText = "";
+                if (nextPageBtn) {
+                    nextPageBtn.disabled = false;
+                }
             }
+        } else {
+            currentHomeSections = [];
+            currentHomeHero = null;
+            currentBrowseVideos = Array.isArray(data.videos) ? data.videos : [];
+            videoGrid.classList.remove("home-layout");
+            if (browseSearchToolbar) browseSearchToolbar.classList.remove("hidden");
+            if (paginationBar) paginationBar.classList.remove("hidden");
+            renderVideoGrid(currentBrowseVideos);
+
+            if (data.totalPages && totalPagesIndicatorStr) {
+                totalPagesIndicatorStr.innerText = `/ ${data.totalPages}`;
+                if (nextPageBtn) {
+                    nextPageBtn.disabled = (currentPage >= data.totalPages);
+                }
+            } else if (totalPagesIndicatorStr) {
+                totalPagesIndicatorStr.innerText = "";
+                if (nextPageBtn) {
+                    nextPageBtn.disabled = false;
+                }
+            }
+        }
+    }
+
+    /**
+     * Renders the creator profile header with tabs and sort buttons.
+     * Can be called optimistically (before API response) using cached currentCreatorData,
+     * or after a successful API response.
+     * @param {string} category - The current user category string e.g. "user:1701564:uploaded:latest"
+     */
+    function renderCreatorHeader(category) {
+        if (!userProfileHeader) return;
+        const creator = currentCreatorData;
+        if (!creator) return;
+
+        const parts = category.split(":");
+        const userId = parts[1];
+        const subpage = parts[2] || "home";
+        const sort = parts[3] || "latest";
+
+        let filterHtml = "";
+        if (subpage === "uploaded" || subpage === "playlists") {
+            filterHtml = `
+                <div class="filter-button-group">
+                    <button class="filter-pill ${sort === 'latest' ? 'active' : ''}" data-sort="latest">最新</button>
+                    <button class="filter-pill ${sort === 'popular' ? 'active' : ''}" data-sort="popular">熱門</button>
+                    <button class="filter-pill ${sort === 'oldest' ? 'active' : ''}" data-sort="oldest">最早</button>
+                </div>
+            `;
+        }
+
+        userProfileHeader.style.setProperty('--avatar-url', `url('${imageUrl(creator.creatorAvatar)}')`);
+        userProfileHeader.innerHTML = `
+            <div class="playlist-rows-wrapper">
+                <div class="profile-main-container">
+                    <div class="profile-avatar-wrapper">
+                        <img src="${imageUrl(creator.creatorAvatar)}" data-src-raw="${escapeHtml(creator.creatorAvatar || "")}" onerror="fallbackImage(this)" alt="avatar">
+                    </div>
+                    <div class="profile-content-right">
+                        <h1 class="profile-display-name">${escapeHtml(creator.creatorName)}</h1>
+                        <div class="profile-sub-stats">
+                            <span class="profile-sub-stats-id">@ ${escapeHtml(creator.creatorId)}</span>
+                            <span class="profile-sub-stats-new-line">${escapeHtml(creator.creatorStats)}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="creator-tabs-divider"></div>
+                <div class="nav-tabs-scroll no-scrollbar-style">
+                    <button class="yt-tab ${subpage === 'home' ? 'active' : ''}" data-tab="home">首頁</button>
+                    <button class="yt-tab ${subpage === 'uploaded' ? 'active' : ''}" data-tab="uploaded">影片</button>
+                    <button class="yt-tab ${subpage === 'playlists' ? 'active' : ''}" data-tab="playlists">播放清單</button>
+                    <button class="yt-tab search-icon-tab" data-tab="search" title="搜索作者视频">🔍</button>
+                </div>
+            </div>
+            ${filterHtml}
+        `;
+        userProfileHeader.classList.remove("hidden");
+
+        // Bind tab clicks
+        userProfileHeader.querySelectorAll(".yt-tab").forEach(btn => {
+            btn.onclick = () => {
+                const tab = btn.getAttribute("data-tab");
+                if (tab === "search") {
+                    const searchInput = document.getElementById("searchInput");
+                    if (searchInput) {
+                        searchInput.value = creator.creatorName;
+                        const searchBtn = document.getElementById("searchBtn");
+                        if (searchBtn) searchBtn.click();
+                    }
+                    return;
+                }
+                loadBrowseCategory(`user:${userId}:${tab}`, 1, true);
+            };
+        });
+
+        // Bind sort clicks
+        userProfileHeader.querySelectorAll(".filter-pill").forEach(btn => {
+            btn.onclick = () => {
+                const newSort = btn.getAttribute("data-sort");
+                loadBrowseCategory(`user:${userId}:${subpage}:${newSort}`, 1, true);
+            };
+        });
+    }
+
+    function refreshBrowseGrid() {
+        if (currentCategory === '首页' && currentBrowseMode === 'category') {
+            renderHomeSections(currentHomeSections, currentHomeHero);
+        } else {
+            renderVideoGrid(currentBrowseVideos);
+        }
+    }
+
+    function createVideoCard(vid) {
+        const card = document.createElement("div");
+        card.className = "grid-item";
+        const isSelected = selectedBrowseItems.has(vid.url);
+        const isPlaylist = vid.url.includes("playlist?list=") || vid.isPlaylist;
+
+        card.innerHTML = `
+            <button class="grid-select-toggle ${isSelected ? 'selected' : ''}" type="button">${isSelected ? '已选' : '选择'}</button>
+            <div class="grid-thumb-container">
+                <img src="${imageUrl(vid.thumbnail)}" data-src-raw="${escapeHtml(vid.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" class="grid-thumb" alt="cover">
+                ${vid.duration ? `<div class="grid-item-duration">${escapeHtml(vid.duration)}</div>` : ''}
+                ${vid.videoCount ? `<div class="grid-item-playlist-badge">${escapeHtml(vid.videoCount)}</div>` : ''}
+            </div>
+            <div class="grid-title" title="${escapeHtml(vid.title || "")}">${escapeHtml(vid.title || "未命名视频")}</div>
+        `;
+        const selectButton = card.querySelector(".grid-select-toggle");
+        setBrowseSelectionState(card, selectButton, isSelected);
+
+        if (isPlaylist) {
+            selectButton.style.display = "none";
+        }
+
+        selectButton.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (selectedBrowseItems.has(vid.url)) {
+                selectedBrowseItems.delete(vid.url);
+            } else {
+                selectedBrowseItems.set(vid.url, {
+                    title: vid.title,
+                    pageUrl: vid.url,
+                    thumbnail: vid.thumbnail,
+                    downloadUrl: ""
+                });
+            }
+            setBrowseSelectionState(card, selectButton, selectedBrowseItems.has(vid.url));
+            updateBrowseSelectionSummary();
+        });
+
+        // Click card delegates to Parser or playlist browsing
+        card.addEventListener("click", () => {
+            if (isPlaylist) {
+                const listId = new URL(vid.url).searchParams.get("list");
+                if (listId) {
+                    loadBrowseCategory("playlist:" + listId, 1, true);
+                    return;
+                }
+            }
+            urlInput.value = vid.url;
+            switchView("viewParser", false);
+            parseBtn.click();
+        });
+        return card;
+    }
+
+    function createHomeVideoCard(vid) {
+        const container = document.createElement("div");
+        container.className = "video-item-container";
+        const isSelected = selectedBrowseItems.has(vid.url);
+        
+        const thumbnail = imageUrl(vid.thumbnail);
+        
+        container.innerHTML = `
+            <div class="horizontal-card">
+                <button class="grid-select-toggle ${isSelected ? 'selected' : ''}" type="button" style="z-index: 10;">${isSelected ? '已选' : '选择'}</button>
+                <div class="video-link">
+                    <div class="thumb-container">
+                        <img class="main-thumb" src="${thumbnail}" data-src-raw="${escapeHtml(vid.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" alt="cover">
+                        ${vid.duration ? `<div class="duration">${escapeHtml(vid.duration)}</div>` : ''}
+                        <div class="stats-container">
+                            ${vid.likes ? `<div class="stat-item"><span class="thumb-icon">👍</span> ${escapeHtml(vid.likes)}</div>` : ''}
+                            ${vid.views ? `<div class="stat-item">${escapeHtml(vid.views)}</div>` : ''}
+                        </div>
+                    </div>
+                    <div class="title" title="${escapeHtml(vid.title || "")}">
+                        ${escapeHtml(vid.title || "未命名视频")}
+                    </div>
+                </div>
+                ${vid.creator ? `
+                <div class="subtitle">
+                    ${escapeHtml(vid.creator)}
+                </div>
+                ` : ''}
+            </div>
+        `;
+        
+        const selectButton = container.querySelector(".grid-select-toggle");
+        
+        function setSelectionState(selected) {
+            if (selected) {
+                selectButton.classList.add("selected");
+                selectButton.innerText = "已选";
+                container.classList.add("selected-card");
+            } else {
+                selectButton.classList.remove("selected");
+                selectButton.innerText = "选择";
+                container.classList.remove("selected-card");
+            }
+        }
+        setSelectionState(isSelected);
+
+        selectButton.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (selectedBrowseItems.has(vid.url)) {
+                selectedBrowseItems.delete(vid.url);
+            } else {
+                selectedBrowseItems.set(vid.url, {
+                    title: vid.title,
+                    pageUrl: vid.url,
+                    thumbnail: vid.thumbnail,
+                    downloadUrl: ""
+                });
+            }
+            setSelectionState(selectedBrowseItems.has(vid.url));
+            updateBrowseSelectionSummary();
+        });
+
+        const cardArea = container.querySelector(".video-link");
+        cardArea.addEventListener("click", (event) => {
+            if (event.target === selectButton) return;
+            if (vid.url.includes("playlist?list=")) {
+                const listId = new URL(vid.url).searchParams.get("list");
+                if (listId) {
+                    switchView("viewBrowse", false);
+                    loadBrowseCategory("playlist:" + listId, 1, true);
+                    return;
+                }
+            }
+            urlInput.value = vid.url;
+            switchView("viewParser", false);
+            parseBtn.click();
+        });
+        
+        return container;
+    }
+
+    function renderHomeHero(hero) {
+        if (!hero) return null;
+        
+        const heroDiv = document.createElement("div");
+        heroDiv.className = "home-hero-banner";
+        
+        const heroThumb = imageUrl(hero.thumbnail);
+        const tagsHtml = (hero.tags || []).map(tag => {
+            return `<span class="hero-tag">${escapeHtml(tag)}</span>`;
+        }).join("");
+        
+        heroDiv.innerHTML = `
+            <div class="hero-bg-wrapper">
+                <img class="hero-bg-img" src="${heroThumb}" data-src-raw="${escapeHtml(hero.thumbnail || "")}" onerror="fallbackImage(this)" alt="hero background">
+                <div class="hero-overlay"></div>
+            </div>
+            <div class="hero-content">
+                <h1 class="hero-title">${escapeHtml(hero.title)}</h1>
+                <div class="hero-meta">
+                    ${hero.creator ? `<span class="hero-creator">${escapeHtml(hero.creator)}</span>` : ''}
+                    ${hero.views ? `<span class="hero-meta-divider">•</span><span class="hero-views">${escapeHtml(hero.views)}</span>` : ''}
+                    ${hero.date ? `<span class="hero-meta-divider">•</span><span class="hero-date">${escapeHtml(hero.date)}</span>` : ''}
+                </div>
+                <div class="hero-tags-wrapper">
+                    ${tagsHtml}
+                </div>
+                <div class="hero-buttons">
+                    <button class="hero-btn btn-play" type="button">
+                        <span class="btn-icon">▶</span>播放
+                    </button>
+                    <button class="hero-btn btn-info" type="button">
+                        <span class="btn-icon">ℹ</span>更多资讯
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        const playBtn = heroDiv.querySelector(".btn-play");
+        const infoBtn = heroDiv.querySelector(".btn-info");
+        const bgWrapper = heroDiv.querySelector(".hero-bg-wrapper");
+        
+        const handleHeroClick = (event) => {
+            event.stopPropagation();
+            if (hero.watchUrl) {
+                urlInput.value = hero.watchUrl;
+                switchView("viewParser", false);
+                parseBtn.click();
+            }
+        };
+        
+        playBtn.addEventListener("click", handleHeroClick);
+        infoBtn.addEventListener("click", handleHeroClick);
+        bgWrapper.addEventListener("click", handleHeroClick);
+        
+        return heroDiv;
+    }
+
+    function renderHomeSections(sections, hero) {
+        if ((!sections || sections.length === 0) && !hero) {
+            videoGrid.innerHTML = `<div class="empty-playlist">该分类下暂无兼容排版资源或需翻页支持</div>`;
+            return;
+        }
+
+        videoGrid.innerHTML = "";
+
+        if (hero) {
+            const heroElement = renderHomeHero(hero);
+            if (heroElement) {
+                videoGrid.appendChild(heroElement);
+            }
+        }
+
+        sections.forEach(sec => {
+            const sectionDiv = document.createElement("div");
+            sectionDiv.className = "home-section";
+
+            const titleDiv = document.createElement("div");
+            titleDiv.className = "home-section-title";
+
+            if (sec.sectionLink) {
+                // Make the title a clickable link
+                const titleBtn = document.createElement("button");
+                titleBtn.type = "button";
+                titleBtn.className = "home-section-title-link";
+                titleBtn.textContent = sec.sectionTitle || "未分类板块";
+                titleBtn.title = `点击查看全部: ${sec.sectionTitle || ""}`;
+                titleBtn.addEventListener("click", () => {
+                    navigateToSectionLink(sec.sectionLink, sec.sectionTitle || "");
+                });
+                const arrowSpan = document.createElement("span");
+                arrowSpan.className = "home-section-title-arrow";
+                arrowSpan.textContent = "›";
+                titleDiv.appendChild(titleBtn);
+                titleDiv.appendChild(arrowSpan);
+            } else {
+                titleDiv.textContent = sec.sectionTitle || "未分类板块";
+            }
+
+            sectionDiv.appendChild(titleDiv);
+
+            const gridDiv = document.createElement("div");
+            gridDiv.className = "home-row horizontal-row";
+
+            const vids = Array.isArray(sec.videos) ? sec.videos : [];
+            vids.forEach(vid => {
+                const card = createHomeVideoCard(vid);
+                gridDiv.appendChild(card);
+            });
+
+            sectionDiv.appendChild(gridDiv);
+            videoGrid.appendChild(sectionDiv);
+        });
+    }
+
+    /**
+     * Parse a hanime1.me section URL and navigate to browse/search view.
+     * Supports sort= and genre= query params from section links.
+     */
+    function navigateToSectionLink(link, title) {
+        try {
+            const url = new URL(link);
+            const sort = url.searchParams.get("sort") || "";
+            const genre = url.searchParams.get("genre") || "";
+            const type = url.searchParams.get("type") || "";
+
+            if (sort || genre || type) {
+                // Navigate via search with the sort/genre params
+                currentSearchState = normalizeSearchState({
+                    query: "",
+                    type: type,
+                    genre: genre,
+                    sort: sort,
+                    date: "",
+                    duration: "",
+                    tags: []
+                });
+                syncSearchTypeControls();
+                syncGlobalSearchChrome();
+                if (currentCategoryTitle) currentCategoryTitle.innerText = title || "正在浏览";
+                switchView("viewBrowse", false);
+                // Update category list highlight
+                document.querySelectorAll("#categoryList li").forEach(li => li.classList.remove("active"));
+                loadSearchResults(1, true);
+            } else {
+                // Try matching as a category from the path
+                const path = url.pathname;
+                const catMatch = path.match(/\/search\/?/);
+                if (catMatch) {
+                    currentSearchState = normalizeSearchState({ query: "", type: "", genre: "", sort: "", date: "", duration: "", tags: [] });
+                    switchView("viewBrowse", false);
+                    loadSearchResults(1, true);
+                }
+            }
+        } catch (e) {
+            // Fallback: do nothing
+            console.warn("navigateToSectionLink: invalid URL", link, e);
         }
     }
 
@@ -434,7 +968,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function proxiedImageUrl(url) {
-        return url ? `/api/proxy/image?url=${encodeURIComponent(url)}` : "";
+        return proxyImageUrl(url);
     }
 
     function historyCoverUrl(task) {
@@ -799,7 +1333,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function updateSeriesDownloadButton() {
-        const count = currentPlaylistItems.length + (urlInput.value.trim() ? 1 : 0);
+        const count = buildSeriesDownloadItems().length;
         downloadSeriesBtn.disabled = count <= 1;
         downloadSeriesBtn.textContent = count > 1 ? `一键下载系列 (${count})` : "一键下载系列";
     }
@@ -834,7 +1368,7 @@ document.addEventListener("DOMContentLoaded", () => {
             card.className = "grid-item related-grid-item";
             card.innerHTML = `
                 <div class="grid-thumb-container">
-                    <img src="/api/proxy/image?url=${encodeURIComponent(item.thumbnail)}" class="grid-thumb" alt="cover">
+                    <img src="${imageUrl(item.thumbnail)}" data-src-raw="${escapeHtml(item.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" class="grid-thumb" alt="cover">
                 </div>
                 <div class="grid-title" title="${escapeHtml(item.title || "")}">${escapeHtml(item.title || "未命名视频")}</div>
             `;
@@ -1140,13 +1674,49 @@ document.addEventListener("DOMContentLoaded", () => {
     // ---- Settings API ----
     settingsBtn.addEventListener("click", async () => {
         settingsModal.classList.remove("hidden");
-        // fetch current
+
+        // fetch available browsers dynamically
+        try {
+            const browserRes = await fetch("/api/browsers");
+            if (browserRes.ok) {
+                const browserData = await browserRes.json();
+                const choices = browserData.choices || [];
+                if (browserChannelSelect) {
+                    browserChannelSelect.innerHTML = choices.map(choice => {
+                        const label = choice.available ? choice.label : `${choice.label} (未检测到)`;
+                        return `<option value="${escapeHtml(choice.channel)}">${escapeHtml(label)}</option>`;
+                    }).join("");
+                }
+            }
+        } catch (e) {
+            console.error("Failed to load browsers list", e);
+        }
+
+        // fetch current settings
         try {
             const res = await fetch("/api/settings");
             const data = await res.json();
             downloadDirInput.value = data.downloadDirectory || "";
             if (maxConcurrentDownloadsInput) {
                 maxConcurrentDownloadsInput.value = data.maxConcurrentDownloads || 3;
+            }
+            if (gopeedHostInput) {
+                gopeedHostInput.value = data.gopeedHost || "127.0.0.1";
+            }
+            if (gopeedPortInput) {
+                gopeedPortInput.value = data.gopeedPort || 9999;
+            }
+            if (gopeedTokenInput) {
+                gopeedTokenInput.value = data.gopeedToken || "";
+            }
+            if (gopeedConnectionsInput) {
+                gopeedConnectionsInput.value = data.gopeedConnections || 16;
+            }
+            if (browserChannelSelect) {
+                browserChannelSelect.value = data.browserChannel || "msedge";
+            }
+            if (browserVerificationTimeoutSecondsInput) {
+                browserVerificationTimeoutSecondsInput.value = data.browserVerificationTimeoutSeconds || 180;
             }
         } catch (e) {
             console.error("Failed to load settings");
@@ -1227,34 +1797,99 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     saveSettingsBtn.addEventListener("click", async () => {
-        const newVal = downloadDirInput.value.trim();
-        if (!newVal) return alert("下载目录不能为空");
+        const downloadDirectory = downloadDirInput.value.trim();
+        if (!downloadDirectory) return alert("下载目录不能为空");
+        
         const maxConcurrentDownloads = Number.parseInt(maxConcurrentDownloadsInput?.value || "3", 10);
         if (!Number.isInteger(maxConcurrentDownloads) || maxConcurrentDownloads < 1 || maxConcurrentDownloads > 12) {
             return alert("并行下载数量必须在 1 到 12 之间");
         }
+
+        const gopeedHost = gopeedHostInput?.value.trim() || "127.0.0.1";
+        if (!gopeedHost) return alert("Gopeed 主机地址不能为空");
+
+        const gopeedPort = Number.parseInt(gopeedPortInput?.value || "9999", 10);
+        if (!Number.isInteger(gopeedPort) || gopeedPort < 1 || gopeedPort > 65535) {
+            return alert("Gopeed 端口必须在 1 到 65535 之间");
+        }
+
+        const gopeedToken = gopeedTokenInput?.value || "";
+
+        const gopeedConnections = Number.parseInt(gopeedConnectionsInput?.value || "16", 10);
+        if (!Number.isInteger(gopeedConnections) || gopeedConnections < 1 || gopeedConnections > 128) {
+            return alert("Gopeed 最大连接数必须在 1 到 128 之间");
+        }
+
+        const browserChannel = browserChannelSelect?.value || "msedge";
+
+        const browserVerificationTimeoutSeconds = Number.parseInt(browserVerificationTimeoutSecondsInput?.value || "180", 10);
+        if (!Number.isInteger(browserVerificationTimeoutSeconds) || browserVerificationTimeoutSeconds < 30 || browserVerificationTimeoutSeconds > 600) {
+            return alert("穿透超时时间必须在 30 到 600 秒之间");
+        }
+
         try {
             const res = await fetch("/api/settings", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ downloadDirectory: newVal, maxConcurrentDownloads })
+                body: JSON.stringify({
+                    downloadDirectory,
+                    maxConcurrentDownloads,
+                    gopeedHost,
+                    gopeedPort,
+                    gopeedToken,
+                    gopeedConnections,
+                    browserChannel,
+                    browserVerificationTimeoutSeconds
+                })
             });
-            if(res.ok) {
-                alert("全局设置已保存！新的并行下载数量会立即用于后续调度。");
+            if (res.ok) {
+                alert("全局设置已保存！新的配置将立即生效。");
                 settingsModal.classList.add("hidden");
             } else {
                 alert("保存失败!");
             }
-        } catch(e) { console.error(e); }
+        } catch(e) {
+            console.error(e);
+            alert("保存出错: " + e.message);
+        }
     });
 
     // ---- Video Player Logic ----
     playVideoBtn.addEventListener("click", () => {
         if (!currentVideoUrl) return;
+        currentVideoFallbackTried = false;
         
         // Hide Cover, Show Player
         coverWrapper.classList.add("hidden");
         playerWrapper.classList.remove("hidden");
+        playerWrapper.classList.remove("preloading");
+
+        const fallbackToProxyVideo = () => {
+            if (currentVideoFallbackTried || !currentProxiedVideoUrl || currentVideoUrl === currentProxiedVideoUrl) return;
+            currentVideoFallbackTried = true;
+            currentVideoUrl = currentProxiedVideoUrl;
+            if(hlsInstance) {
+                hlsInstance.destroy();
+                hlsInstance = null;
+            }
+            videoPlayer.pause();
+            videoPlayer.removeAttribute("src");
+            videoPlayer.load();
+            if (currentVideoUrl.includes(".m3u8") && Hls.isSupported()) {
+                hlsInstance = new Hls();
+                hlsInstance.loadSource(currentVideoUrl);
+                hlsInstance.attachMedia(videoPlayer);
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
+                    videoPlayer.play();
+                });
+            } else {
+                videoPlayer.onerror = null;
+                videoPlayer.dataset.src = currentVideoUrl;
+                videoPlayer.src = currentVideoUrl;
+                const playPromise = videoPlayer.play();
+                if (playPromise) playPromise.catch(() => {});
+            }
+        };
 
         // Use HLS.js for m3u8, native HTML5 for mp4
         if (currentVideoUrl.includes(".m3u8")) {
@@ -1266,6 +1901,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
                     videoPlayer.play();
                 });
+                hlsInstance.on(Hls.Events.ERROR, function(_event, data) {
+                    if (data && data.fatal) fallbackToProxyVideo();
+                });
             } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
                 // For Native Safari
                 videoPlayer.src = currentVideoUrl;
@@ -1274,8 +1912,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         } else {
-            videoPlayer.src = currentVideoUrl;
-            videoPlayer.play();
+            videoPlayer.onerror = fallbackToProxyVideo;
+            videoPlayer.preload = "auto";
+            if (videoPlayer.dataset.src !== currentVideoUrl || videoPlayer.error) {
+                videoPlayer.dataset.src = currentVideoUrl;
+                videoPlayer.src = currentVideoUrl;
+                videoPlayer.load();
+            }
+            const playPromise = videoPlayer.play();
+            if (playPromise) playPromise.catch(fallbackToProxyVideo);
         }
     });
 
@@ -1285,8 +1930,12 @@ document.addEventListener("DOMContentLoaded", () => {
             hlsInstance = null;
         }
         videoPlayer.pause();
-        videoPlayer.src = "";
+        videoPlayer.onerror = null;
+        delete videoPlayer.dataset.src;
+        videoPlayer.removeAttribute("src");
+        videoPlayer.load();
         playerWrapper.classList.add("hidden");
+        playerWrapper.classList.remove("preloading");
         coverWrapper.classList.remove("hidden");
     });
 
@@ -1308,11 +1957,17 @@ document.addEventListener("DOMContentLoaded", () => {
         // reset player state
         if(hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
         videoPlayer.pause();
+        videoPlayer.removeAttribute("src");
+        videoPlayer.load();
         playerWrapper.classList.add("hidden");
+        playerWrapper.classList.remove("preloading");
         coverWrapper.classList.remove("hidden");
         currentVideoData = null;
         currentRawVideoUrl = "";
         currentVideoUrl = "";
+        currentProxiedVideoUrl = "";
+        currentVideoFallbackTried = false;
+        delete videoPlayer.dataset.src;
         currentPlaylistItems = [];
         currentRelatedVideos = [];
         playlistCount.textContent = "0";
@@ -1358,11 +2013,38 @@ document.addEventListener("DOMContentLoaded", () => {
         currentVideoData = data;
         currentRawVideoUrl = data.videoUrl || "";
         mainTitle.textContent = data.title || "未知标题";
-        currentVideoUrl = currentRawVideoUrl ? `/api/proxy/video?url=${encodeURIComponent(currentRawVideoUrl)}` : "";
+        currentVideoUrl = directMediaUrl(currentRawVideoUrl);
+        currentProxiedVideoUrl = proxyVideoUrl(currentRawVideoUrl);
+        preloadCurrentVideo();
         
+        // Handle Creator Info Card
+        if (data.creator && data.creator.id && data.creator.name) {
+            if (creatorName) creatorName.textContent = data.creator.name;
+            if (creatorAvatar) {
+                creatorAvatar.dataset.srcRaw = data.creator.avatar || "";
+                creatorAvatar.dataset.proxyTried = "0";
+                creatorAvatar.onerror = () => fallbackImage(creatorAvatar);
+                creatorAvatar.src = data.creator.avatar 
+                    ? imageUrl(data.creator.avatar)
+                    : "https://via.placeholder.com/48x48.png?text=Avatar";
+            }
+            if (creatorInfoCard) {
+                creatorInfoCard.classList.remove("hidden");
+                creatorInfoCard.onclick = () => {
+                    switchView("viewBrowse", false);
+                    loadBrowseCategory("user:" + data.creator.id, 1, true);
+                };
+            }
+        } else {
+            if (creatorInfoCard) creatorInfoCard.classList.add("hidden");
+        }
+
         // Image Anti-Hotlink
         if (data.thumbnail) {
-            mainCover.src = `/api/proxy/image?url=${encodeURIComponent(data.thumbnail)}`;
+            mainCover.dataset.srcRaw = data.thumbnail;
+            mainCover.dataset.proxyTried = "0";
+            mainCover.onerror = () => fallbackImage(mainCover);
+            mainCover.src = imageUrl(data.thumbnail);
         } else {
             mainCover.src = "https://via.placeholder.com/1280x720.png?text=No+Cover";
         }
@@ -1388,7 +2070,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const el = document.createElement("div");
                 el.className = "playlist-item";
                 el.innerHTML = `
-                    <img src="/api/proxy/image?url=${encodeURIComponent(item.thumbnail)}" class="item-thumb" alt="thumb">
+                    <img src="${imageUrl(item.thumbnail)}" data-src-raw="${escapeHtml(item.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" class="item-thumb" alt="thumb">
                     <div class="item-details">
                         <div class="item-title" title="${item.title}">${item.title}</div>
                     </div>
@@ -1476,7 +2158,20 @@ document.addEventListener("DOMContentLoaded", () => {
         const pageIndicator = document.getElementById('pageIndicator');
         const totalPagesIndicatorStr = document.getElementById('totalPagesIndicatorStr');
 
-        title.innerText = `正在浏览: ${category}`;
+        if (category.startsWith("user:")) {
+            title.innerText = "正在浏览: 作者主页";
+            categoryListItems.forEach(item => item.classList.remove("active"));
+            // Optimistic UI update: immediately render tabs/sort buttons using cached creator data
+            // so they appear instantly even before the API responds (or if it fails with 503)
+            if (currentCreatorData) {
+                renderCreatorHeader(category);
+            }
+        } else if (category.startsWith("playlist:")) {
+            title.innerText = "正在浏览: 播放清单";
+            categoryListItems.forEach(item => item.classList.remove("active"));
+        } else {
+            title.innerText = `正在浏览: ${category}`;
+        }
         if (pageIndicator) pageIndicator.innerText = page;
 
         if (pushState) {
@@ -1552,41 +2247,7 @@ document.addEventListener("DOMContentLoaded", () => {
         videoGrid.innerHTML = "";
 
         videos.forEach(vid => {
-            const card = document.createElement("div");
-            card.className = "grid-item";
-            const isSelected = selectedBrowseItems.has(vid.url);
-            card.innerHTML = `
-                <button class="grid-select-toggle ${isSelected ? 'selected' : ''}" type="button">${isSelected ? '已选' : '选择'}</button>
-                <div class="grid-thumb-container">
-                    <img src="/api/proxy/image?url=${encodeURIComponent(vid.thumbnail)}" class="grid-thumb" alt="cover">
-                </div>
-                <div class="grid-title" title="${escapeHtml(vid.title || "")}">${escapeHtml(vid.title || "未命名视频")}</div>
-            `;
-            const selectButton = card.querySelector(".grid-select-toggle");
-            setBrowseSelectionState(card, selectButton, isSelected);
-
-            selectButton.addEventListener("click", (event) => {
-                event.stopPropagation();
-                if (selectedBrowseItems.has(vid.url)) {
-                    selectedBrowseItems.delete(vid.url);
-                } else {
-                    selectedBrowseItems.set(vid.url, {
-                        title: vid.title,
-                        pageUrl: vid.url,
-                        thumbnail: vid.thumbnail,
-                        downloadUrl: ""
-                    });
-                }
-                setBrowseSelectionState(card, selectButton, selectedBrowseItems.has(vid.url));
-                updateBrowseSelectionSummary();
-            });
-
-            // Click card delegates to Parser
-            card.addEventListener("click", () => {
-                urlInput.value = vid.url;
-                switchView("viewParser", false);
-                parseBtn.click();
-            });
+            const card = createVideoCard(vid);
             videoGrid.appendChild(card);
         });
     }
@@ -1601,13 +2262,13 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         });
         updateBrowseSelectionSummary();
-        renderVideoGrid(currentBrowseVideos);
+        refreshBrowseGrid();
     });
 
     clearSelectedBtn.addEventListener("click", () => {
         selectedBrowseItems.clear();
         updateBrowseSelectionSummary();
-        renderVideoGrid(currentBrowseVideos);
+        refreshBrowseGrid();
     });
 
     addSelectedToQueueBtn.addEventListener("click", async () => {
@@ -1615,7 +2276,7 @@ document.addEventListener("DOMContentLoaded", () => {
             await enqueueDownloadItems(Array.from(selectedBrowseItems.values()), `已批量加入 ${selectedBrowseItems.size} 个下载任务`);
             selectedBrowseItems.clear();
             updateBrowseSelectionSummary();
-            renderVideoGrid(currentBrowseVideos);
+            refreshBrowseGrid();
         } catch (error) {
             alert(`批量加入失败: ${error.message}`);
         }
