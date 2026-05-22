@@ -28,6 +28,19 @@ dist/
 history-cover-cache/
 *.log
 
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # Maven wrapper (optional, keep if needed)
 # !mvnw
 # !.mvn/wrapper/
+
+# Project Specific
+.playwright_data/
+.claude/
+scratch/
+comsol_mphserver_v2.port
+node_modules/
+build/

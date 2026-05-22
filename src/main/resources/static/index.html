@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hanime Media Center</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=2.3">
+    <link rel="stylesheet" href="style.css?v=3.3">
     <!-- Include HLS.js for streaming m3u8 videos -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
@@ -74,7 +74,8 @@
                 <aside class="category-nav">
                     <h3>板块分类</h3>
                     <ul id="categoryList">
-                        <li class="active" data-cat="裏番">🔴 里番</li>
+                        <li class="active" data-cat="首页">🏠 首页</li>
+                        <li data-cat="裏番">🔴 里番</li>
                         <li data-cat="泡麵番">🍜 泡面番</li>
                         <li data-cat="Motion Anime">🎞️ Motion Anime</li>
                         <li data-cat="3DCG">🧊 3DCG</li>
@@ -86,6 +87,7 @@
                     </ul>
                 </aside>
                 <main class="grid-content">
+                    <div id="userProfileHeader" class="user-profile-header hidden"></div>
                     <div class="grid-header">
                         <h2 id="currentCategoryTitle">最新 里番</h2>
                         <div class="browse-search-toolbar" id="browseSearchToolbar">
@@ -214,6 +216,17 @@
 
                             <h1 class="video-title" id="mainTitle">Loading...</h1>
                             
+                            <div class="creator-info-card hidden" id="creatorInfoCard">
+                                <img src="" class="creator-avatar" id="creatorAvatar" alt="creator avatar">
+                                <div class="creator-meta">
+                                    <div class="creator-name-row">
+                                        <span class="creator-name" id="creatorName"></span>
+                                        <span class="creator-tag">上传者</span>
+                                    </div>
+                                    <div class="creator-sub">点击查看作者的所有视频</div>
+                                </div>
+                            </div>
+                            
                             <div class="action-bar">
                                 <button class="btn-download" id="startDownloadBtn">
                                     <span class="icon">⬇️</span> 极速接力下载
@@ -250,13 +263,24 @@
                     </aside>
                 </div>
 
-                <section class="related-videos-section" id="relatedVideosSection">
-                    <div class="section-header">
-                        <h2>相关视频</h2>
-                        <span class="badge" id="relatedVideoCount">0</span>
+                <section class="media-detail-section" id="mediaDetailSection">
+                    <div class="media-detail-tabs" id="mediaDetailTabs">
+                        <button class="media-detail-tab active" type="button" data-detail-tab="related">
+                            相关视频 <span class="badge" id="relatedVideoCount">0</span>
+                        </button>
+                        <button class="media-detail-tab" type="button" data-detail-tab="comments">
+                            评论 <span class="badge" id="commentsCount">0</span>
+                        </button>
                     </div>
-                    <div class="video-grid related-video-grid" id="relatedVideoGrid">
-                        <div class="empty-playlist">暂无相关视频</div>
+                    <div class="media-detail-panel active" id="detailPanelRelated" data-detail-panel="related">
+                        <div class="video-grid related-video-grid" id="relatedVideoGrid">
+                            <div class="empty-playlist">暂无相关视频</div>
+                        </div>
+                    </div>
+                    <div class="media-detail-panel hidden" id="detailPanelComments" data-detail-panel="comments">
+                        <div class="comments-list" id="commentsList">
+                            <div class="empty-playlist">解析视频后显示评论</div>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -276,8 +300,8 @@
 
     <!-- Settings Modal -->
     <div class="modal hidden" id="settingsModal">
-        <div class="modal-content text-left" style="width:500px">
-            <h2 style="margin-bottom: 2rem;">⚙️ 全局配置设定</h2>
+        <div class="modal-content text-left" style="width: 600px;">
+            <h2 style="margin-bottom: 1.5rem;">⚙️ 全局配置设定</h2>
             
             <div class="form-group">
                 <label for="downloadDir">目标下载目录 (绝对路径)</label>
@@ -285,15 +309,66 @@
                 <small class="help-text">设置后，后端的发起的原生多任务下载将自动保存至此文件夹。</small>
             </div>
 
-            <div class="form-group">
-                <label for="maxConcurrentDownloads">并行下载数量</label>
-                <input type="number" id="maxConcurrentDownloads" min="1" max="12" step="1" placeholder="3" style="width: 100%;">
-                <small class="help-text">同时执行的下载任务数，默认 3。数值过高可能导致站点限速或本机网络拥塞。</small>
+            <div class="settings-grid-2">
+                <div class="form-group">
+                    <label for="maxConcurrentDownloads">并行下载数量</label>
+                    <input type="number" id="maxConcurrentDownloads" min="1" max="12" step="1" placeholder="3">
+                    <small class="help-text">默认 3，最大 12。</small>
+                </div>
+                <div class="form-group">
+                    <label for="pageCacheLimit">页面缓存数量</label>
+                    <input type="number" id="pageCacheLimit" min="1" max="200" step="1" placeholder="20">
+                    <small class="help-text">默认 20，超过后按最近最少使用淘汰。</small>
+                </div>
             </div>
 
-            <div class="action-bar" style="justify-content: space-between; margin-top: 2rem; margin-bottom: 0;">
+            <div class="settings-grid-2">
+                <div class="form-group">
+                    <label for="browserVerificationTimeoutSeconds">人机验证超时 (秒)</label>
+                    <input type="number" id="browserVerificationTimeoutSeconds" min="30" max="600" step="1" placeholder="180">
+                    <small class="help-text">默认 180，最大 600。</small>
+                </div>
+            </div>
+
+            <div class="settings-grid-2">
+                <div class="form-group">
+                    <label for="browserChannel">人机验证过盾浏览器</label>
+                    <select id="browserChannel">
+                        <!-- Populated by JavaScript -->
+                    </select>
+                    <small class="help-text">选择 Cloudflare 验证所用浏览器。</small>
+                </div>
+                <div class="form-group">
+                    <label for="gopeedConnections">Gopeed 最大连接数</label>
+                    <input type="number" id="gopeedConnections" min="1" max="128" step="1" placeholder="16">
+                    <small class="help-text">默认 16，最大 128。</small>
+                </div>
+            </div>
+
+            <div class="settings-grid-2">
+                <div class="form-group">
+                    <label for="gopeedHost">Gopeed 主机地址</label>
+                    <input type="text" id="gopeedHost" placeholder="127.0.0.1">
+                </div>
+                <div class="form-group">
+                    <label for="gopeedPort">Gopeed 端口</label>
+                    <input type="number" id="gopeedPort" min="1" max="65535" step="1" placeholder="9999">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="gopeedToken">Gopeed Api Token (可选)</label>
+                <input type="password" id="gopeedToken" placeholder="若无 Token 请留空">
+            </div>
+
+            <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
                 <button class="btn-secondary" id="checkUpdateBtn" type="button" title="从 GitHub 检查最新版本" style="border-color: rgba(100, 200, 255, 0.3); color: #6bc5ff;">🔍 检查更新</button>
                 <span id="updateResult" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
+            </div>
+
+            <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
+                <button class="btn-secondary" id="clearPageCacheBtn" title="清除分类和搜索页面缓存" style="border-color: rgba(100, 200, 255, 0.3); color: #6bc5ff;">清除页面缓存</button>
+                <span id="pageCacheStatus" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
             </div>
 
             <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
@@ -392,6 +467,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=2.3"></script>
+    <script src="app.js?v=3.3"></script>
 </body>
 </html>

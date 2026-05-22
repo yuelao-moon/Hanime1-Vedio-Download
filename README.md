@@ -1,188 +1,198 @@
 # Hanime Media Center
 
-本地运行的 Hanime 视频解析与下载工具。提供分类浏览、视频解析、下载队列管理、历史记录去重、失败自动重试、检测更新等功能。
+Hanime Media Center 是一个本地运行的视频解析、浏览和下载管理工具。程序启动后会在本机开启 Web 服务，并自动打开浏览器访问控制台。
 
----
+后端使用 Python + FastAPI，前端是原生 HTML/CSS/JavaScript。下载任务由内置队列管理，实际下载可交给 Gopeed API 执行。
 
-## 快速开始
+## 功能概览
 
-### 方式一：直接运行
+- 分类、搜索、作者主页和播放清单浏览
+- 视频详情解析、在线播放地址探测、相关视频和评论展示
+- 评论回复、头像、点赞数和回复数解析
+- 页面缓存，支持设置缓存数量和清除页面缓存
+- 下载队列、任务历史、暂停、恢复、取消和重试
+- Gopeed HTTP API 接力下载
+- Edge / Chrome / Chromium 自动检测，用于必要时完成人机验证
+- 单 exe 打包运行，静态前端资源内置到程序中
 
-1. 从 [Releases](https://github.com/yuelao-moon/Hanime1-Vedio-Download/releases) 下载 `HanimeMediaCenter-*.exe`
-2. 双击运行，程序自动解压并启动本地 Web 服务（含内置 Java 21 运行环境）
-3. 浏览器访问启动日志中显示的地址（默认 `http://localhost:58080`）
+## 直接运行源码
 
-### 方式二：源码编译运行
+### 环境要求
 
-**前置条件**：JDK 21+，Maven 3.6+
+- Windows 10/11
+- Python 3.11+
+- Edge、Chrome 或 Chromium 中至少一个
+- 可选：Gopeed，只有需要下载时才必须启动
 
-```bash
-mvn spring-boot:run
+### 安装依赖
+
+```powershell
+python -m pip install -r python_backend\requirements.txt
 ```
 
-浏览器访问 `http://localhost:58080`。
+### 启动
 
-### 方式三：自打包 EXE
-
-```bash
-powershell -ExecutionPolicy Bypass -File package-exe.ps1
+```powershell
+powershell -ExecutionPolicy Bypass -File run-python-backend.ps1
 ```
 
-输出到 `dist/HanimeMediaCenter.exe`（含内置 JRE 的安装程序）。
+默认地址：
 
----
+```text
+http://127.0.0.1:58080/
+```
 
-## 功能
+指定数据目录：
 
-### 浏览与解析
+```powershell
+powershell -ExecutionPolicy Bypass -File run-python-backend.ps1 -AppHome "D:\HanimeData"
+```
 
-- **分类浏览**：按分类抓取站点内容，分页浏览封面和标题
-- **视频解析**：输入视频页面地址，解析可播放/下载的视频源
-- **系列视频**：在详情区域查看同系列条目，支持一键加入下载
+## 打包为单 exe
 
-### 下载中心
+项目提供了 Windows 一键打包脚本：
 
-- **下载队列**：实时显示进度、速度、状态
-- **暂停/恢复/取消**：支持单个和批量操作，取消后立即进入历史记录
-- **失败自动重试**：下载失败自动重试最多 3 次，30 秒无进度也判定为超时重试
-- **历史记录**：仅保留已完成/下载失败两种标签；按标题去重，文件存在则覆盖为已完成
-- **全部重试**：一键重试所有失败任务
-- **本地文件跳过**：目标文件已存在时跳过下载直接标记完成
+```powershell
+powershell -ExecutionPolicy Bypass -File build-windows-onefile.ps1
+```
 
-### 设置
+脚本会执行：
 
-- **下载目录**：自定义视频保存路径
-- **并发控制**：调整最大同时下载数
-- **缓存清理**：清除浏览器抓取缓存
-- **检查更新**：从 GitHub Release 检查新版本
+- 安装/确认 Python 依赖和 PyInstaller
+- 编译检查 Python 文件
+- 检查前端 `app.js` 语法
+- 使用 `HanimeMediaCenter.spec` 打包
+- 输出单文件程序到 `dist\HanimeMediaCenter.exe`
 
-### 视觉优化
+如果不想在打包前运行测试：
 
-- **封面智能显示**：自动检测图片横竖方向，横图铺满宽度，竖图自适应高度
-- **状态标签简化**：历史中只保留"已完成"（绿）和"下载失败"（按钮可重试）
+```powershell
+powershell -ExecutionPolicy Bypass -File build-windows-onefile.ps1 -SkipTests
+```
 
----
+清理旧构建并重新打包：
 
-## 技术栈
+```powershell
+powershell -ExecutionPolicy Bypass -File build-windows-onefile.ps1 -Clean
+```
 
-### 前端
+## 运行 exe
 
-- 原生 HTML / CSS / JavaScript（无框架）
-- Hls.js（m3u8 流播放）
-- 自定义玻璃态 UI 风格
+打包完成后运行：
 
-### 后端
+```powershell
+.\dist\HanimeMediaCenter.exe
+```
 
-- **Java 21** + **Spring Boot 3.2.4**
-- **Playwright for Java**：驱动系统 Edge/Chrome 浏览器，处理 Cloudflare 验证
-- **Jsoup**：从抓取的 HTML 中提取结构化数据
-- **SSE (SseEmitter)**：实时推送下载进度
+指定端口或数据目录：
 
-### 下载引擎
+```powershell
+.\dist\HanimeMediaCenter.exe --port 58081 --app-home "D:\HanimeData"
+```
 
-- 任务队列（`LinkedBlockingQueue` + `ConcurrentHashMap`）
-- 多线程并行下载（12 workers）
-- 解析串行化（`resolveLock`）：多任务并发时视频解析排队使用 Playwright，不阻塞下载插槽
-- 超时看门狗（30 秒无进度自动重试）
-- 文件存在性校验（`Files.exists + Files.size > 0`），本地已有视频则跳过下载直接完成
-- 断点续传（清理部分文件后重试）
+程序启动后会自动打开：
 
-### 打包
+```text
+http://127.0.0.1:58080/
+```
 
-- **Maven**：项目构建
-- **jlink**：创建最小 JRE
-- **jpackage**：生成 Windows 安装程序（含内置 JRE，~50MB）
+如果端口已被占用，程序会直接打开已有服务页面。
 
----
+## 本地数据
+
+默认数据目录：
+
+```text
+%LOCALAPPDATA%\HanimeMediaCenter\
+```
+
+常见文件：
+
+- `settings.json`：下载目录、Gopeed、浏览器和页面缓存设置
+- `download-history.json`：下载历史
+- `.playwright_data\`：浏览器验证会话数据
+
+这些数据不会打进 exe，便于升级程序时保留设置和历史。
+
+## Gopeed 下载配置
+
+使用下载功能前，请先启动 Gopeed 并开启 HTTP API。然后在设置里确认：
+
+- Gopeed 主机，默认 `127.0.0.1`
+- Gopeed 端口，默认 `9999`
+- Token，如果 Gopeed 未配置 Token 可留空
+- 单任务连接数
+- 下载目录
+
+只解析和浏览视频时不需要启动 Gopeed。
+
+## 验证命令
+
+```powershell
+python -m pytest python_backend/tests -v
+python -m compileall -q python_backend
+node --check src\main\resources\static\app.js
+python python_backend\smoke.py
+```
+
+`smoke.py` 会启动本地测试服务并验证主要 API 是否可用。
 
 ## 项目结构
 
-```
-src/main/java/com/wangver/hanime/
-├── controller/
-│   └── ApiController.java          # REST API 入口
-│   └── DownloadController.java     # 下载相关端点
-├── service/
-│   ├── DownloadService.java        # 下载队列、重试、超时、历史去重
-│   ├── HanimeParserService.java    # 视频解析、Playwright 抓取
-│   ├── PlaywrightBrowserService.java # 浏览器管理
-│   ├── SettingsManager.java        # 配置读写
-│   ├── AppVersion.java             # 版本号 + GitHub 仓库信息
-│   └── ...
-├── model/
-│   ├── DownloadTaskView.java       # 下载任务视图
-│   ├── DownloadStatus.java         # 状态枚举
-│   ├── AppSettings.java            # 设置模型
-│   └── ...
-└── resource/static/
-    ├── index.html                  # 主页面
-    ├── app.js                      # 前端交互逻辑
-    └── style.css                   # 界面样式
-```
+```text
+python_backend/
+├── app/
+│   ├── main.py          # FastAPI 应用和 API 路由
+│   ├── scraper.py       # HTTP 抓取和 Playwright 验证兜底
+│   ├── parser.py        # 页面、评论、回复和视频信息解析
+│   ├── downloads.py     # 下载队列、SSE 和 Gopeed API
+│   ├── settings.py      # 用户设置和本地数据路径
+│   ├── browsers.py      # 本机浏览器检测
+│   └── paths.py         # 源码/打包后的静态资源定位
+├── desktop.py           # exe 桌面启动入口
+├── run.py               # 源码服务启动入口
+├── requirements.txt     # Python 依赖
+└── tests/               # 自动化测试
 
----
+src/main/resources/static/
+├── index.html
+├── app.js
+└── style.css
 
-## 关键特性说明
-
-### 下载重试机制
-
-```
-下载异常/超时
-  ├─ retryCount < 3 → QUEUED → 重新入队
-  │   errorMessage: "下载失败/超时，第N次重试中"
-  └─ retryCount >= 3 → FAILED → 进入历史记录
-      errorMessage: "已重试3次，下载失败/超时"
+HanimeMediaCenter.spec       # PyInstaller 配置
+build-windows-onefile.ps1    # Windows 单 exe 打包脚本
 ```
 
-- 网络波动、Cloudflare 拦截、服务器超时均会触发重试
-- 重试前自动清理残留的部分文件
-- 30 秒进度看门狗：进度无变化超过 30 秒自动触发重试
+## 常见问题
 
-### 历史记录去重
+### 打开 exe 后没有页面
 
-```
-每次添加记录或打开下载中心时:
-  1. 按标题分组
-  2. 检查文件是否实际存在于磁盘
-     ├─ 存在 → 覆盖为 COMPLETED
-     └─ 不存在 → 优先保留 FAILED（显示错误信息）
-  3. 同一标题只保留一条记录
+检查是否被安全软件拦截，或手动访问：
+
+```text
+http://127.0.0.1:58080/
 ```
 
-### 检测更新
+### 端口被占用
 
-- 通过 GitHub Releases API 检查版本
-- 设置面板中点击"检查更新"
-- 后端自动对比版本号，有更新则显示下载链接
+换一个端口启动：
 
----
+```powershell
+.\dist\HanimeMediaCenter.exe --port 58081
+```
 
-## 版本号维护
+### Cloudflare 或人机验证失败
 
-发新版时需同步修改两处：
+在设置里切换浏览器通道，例如 Edge、Chrome 或 Chromium。验证浏览器需要本机已安装，并且不要在验证过程中关闭弹出的浏览器窗口。
 
-| 文件 | 位置 |
-|------|------|
-| `src/main/java/.../AppVersion.java` | `VERSION = "1.0.0"` |
-| `pom.xml` | `<version>1.0.0-SNAPSHOT</version>` |
+### 下载任务创建失败
 
-然后在 GitHub 创建 Release（tag 格式 `v1.1.0`），用户即可通过"检查更新"检测到。
+确认 Gopeed 已启动、HTTP API 可访问，端口和 Token 与设置一致。
 
----
+### exe 体积较大
 
-## 本地数据目录
-
-程序运行数据保存在 `%LOCALAPPDATA%\HanimeMediaCenter\`：
-
-- `settings.json` — 用户配置（下载目录、并发数等）
-- `download-history.json` — 下载历史
-- `bundle/` — EXE 自解压的运行时文件
-- `playwright-data/` — 浏览器缓存
-
----
+这是单文件打包的正常现象。程序包含 Python 运行时、后端依赖和前端静态资源，但不内置 Edge/Chrome 浏览器本体。
 
 ## 免责声明
 
-- 本项目是一个**本地运行的个人工具**，不是云端服务
-- 抓取能力依赖系统已安装的 Edge 或 Chrome 浏览器
-- 仅用于个人学习和研究，请遵守目标网站的使用条款
+本项目仅作为本地个人工具使用。请遵守目标网站的使用条款和所在地法律法规。抓取和解析结果受网络环境、站点结构和验证策略影响，不能保证长期稳定。
