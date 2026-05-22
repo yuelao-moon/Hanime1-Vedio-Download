@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hanime Media Center</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=3.0">
+    <link rel="stylesheet" href="style.css?v=3.3">
     <!-- Include HLS.js for streaming m3u8 videos -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
@@ -263,13 +263,24 @@
                     </aside>
                 </div>
 
-                <section class="related-videos-section" id="relatedVideosSection">
-                    <div class="section-header">
-                        <h2>相关视频</h2>
-                        <span class="badge" id="relatedVideoCount">0</span>
+                <section class="media-detail-section" id="mediaDetailSection">
+                    <div class="media-detail-tabs" id="mediaDetailTabs">
+                        <button class="media-detail-tab active" type="button" data-detail-tab="related">
+                            相关视频 <span class="badge" id="relatedVideoCount">0</span>
+                        </button>
+                        <button class="media-detail-tab" type="button" data-detail-tab="comments">
+                            评论 <span class="badge" id="commentsCount">0</span>
+                        </button>
                     </div>
-                    <div class="video-grid related-video-grid" id="relatedVideoGrid">
-                        <div class="empty-playlist">暂无相关视频</div>
+                    <div class="media-detail-panel active" id="detailPanelRelated" data-detail-panel="related">
+                        <div class="video-grid related-video-grid" id="relatedVideoGrid">
+                            <div class="empty-playlist">暂无相关视频</div>
+                        </div>
+                    </div>
+                    <div class="media-detail-panel hidden" id="detailPanelComments" data-detail-panel="comments">
+                        <div class="comments-list" id="commentsList">
+                            <div class="empty-playlist">解析视频后显示评论</div>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -304,6 +315,14 @@
                     <input type="number" id="maxConcurrentDownloads" min="1" max="12" step="1" placeholder="3">
                     <small class="help-text">默认 3，最大 12。</small>
                 </div>
+                <div class="form-group">
+                    <label for="pageCacheLimit">页面缓存数量</label>
+                    <input type="number" id="pageCacheLimit" min="1" max="200" step="1" placeholder="20">
+                    <small class="help-text">默认 20，超过后按最近最少使用淘汰。</small>
+                </div>
+            </div>
+
+            <div class="settings-grid-2">
                 <div class="form-group">
                     <label for="browserVerificationTimeoutSeconds">人机验证超时 (秒)</label>
                     <input type="number" id="browserVerificationTimeoutSeconds" min="30" max="600" step="1" placeholder="180">
@@ -345,6 +364,11 @@
             <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
                 <button class="btn-secondary" id="checkUpdateBtn" type="button" title="从 GitHub 检查最新版本" style="border-color: rgba(100, 200, 255, 0.3); color: #6bc5ff;">🔍 检查更新</button>
                 <span id="updateResult" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
+            </div>
+
+            <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
+                <button class="btn-secondary" id="clearPageCacheBtn" title="清除分类和搜索页面缓存" style="border-color: rgba(100, 200, 255, 0.3); color: #6bc5ff;">清除页面缓存</button>
+                <span id="pageCacheStatus" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
             </div>
 
             <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
@@ -443,6 +467,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=3.0"></script>
+    <script src="app.js?v=3.3"></script>
 </body>
 </html>

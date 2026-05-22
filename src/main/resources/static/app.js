@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const saveSettingsBtn = document.getElementById("saveSettingsBtn");
     const downloadDirInput = document.getElementById("downloadDir");
     const maxConcurrentDownloadsInput = document.getElementById("maxConcurrentDownloads");
+    const pageCacheLimitInput = document.getElementById("pageCacheLimit");
     
     // Gopeed & Browser Settings
     const gopeedHostInput = document.getElementById("gopeedHost");
@@ -80,9 +81,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const userProfileHeader = document.getElementById("userProfileHeader");
     const playlistContainer = document.getElementById("playlistContainer");
     const playlistCount = document.getElementById("playlistCount");
-    const relatedVideosSection = document.getElementById("relatedVideosSection");
+    const mediaDetailTabs = document.getElementById("mediaDetailTabs");
+    const detailPanelRelated = document.getElementById("detailPanelRelated");
+    const detailPanelComments = document.getElementById("detailPanelComments");
     const relatedVideoGrid = document.getElementById("relatedVideoGrid");
     const relatedVideoCount = document.getElementById("relatedVideoCount");
+    const commentsList = document.getElementById("commentsList");
+    const commentsCount = document.getElementById("commentsCount");
     const playlistSidebar = document.querySelector(".playlist-sidebar");
     const startDownloadBtn = document.getElementById("startDownloadBtn");
     const downloadSeriesBtn = document.getElementById("downloadSeriesBtn");
@@ -126,6 +131,12 @@ document.addEventListener("DOMContentLoaded", () => {
     let currentHomeSections = [];
     let currentHomeHero = null;
     let currentCreatorData = null; // Cache last successful creator page data
+    let pageCacheLimit = 20;
+    const PAGE_CACHE_STORAGE_KEY = "hanimeMediaCenter.pageCache.v1";
+    let pageCache = loadPageCache();
+    if ("scrollRestoration" in history) {
+        history.scrollRestoration = "manual";
+    }
 
     // ---- Logging ----
     function log(message, type = "info") {
@@ -148,6 +159,144 @@ document.addEventListener("DOMContentLoaded", () => {
             '"': '&quot;',
             "'": '&#39;'
         }[char]));
+    }
+
+    function loadPageCache() {
+        try {
+            const raw = window.sessionStorage?.getItem(PAGE_CACHE_STORAGE_KEY);
+            const entries = raw ? JSON.parse(raw) : [];
+            if (!Array.isArray(entries)) return new Map();
+            return new Map(entries.filter(entry => Array.isArray(entry) && entry.length === 2));
+        } catch (_error) {
+            return new Map();
+        }
+    }
+
+    function persistPageCache() {
+        try {
+            window.sessionStorage?.setItem(PAGE_CACHE_STORAGE_KEY, JSON.stringify(Array.from(pageCache.entries())));
+        } catch (_error) {
+            // Cache is best-effort; ignore quota/private-mode storage failures.
+        }
+        updatePageCacheStatus();
+    }
+
+    function enforcePageCacheLimit() {
+        while (pageCache.size > pageCacheLimit) {
+            let oldestKey = null;
+            let oldestTime = Number.POSITIVE_INFINITY;
+            for (const [entryKey, entry] of pageCache.entries()) {
+                const time = Number(entry?.lastUsed || entry?.updatedAt || 0);
+                if (time < oldestTime) {
+                    oldestTime = time;
+                    oldestKey = entryKey;
+                }
+            }
+            if (!oldestKey) break;
+            pageCache.delete(oldestKey);
+        }
+    }
+
+    function applyPageCacheLimit(value) {
+        const parsed = Number.parseInt(value ?? "20", 10);
+        pageCacheLimit = Number.isInteger(parsed) ? Math.min(Math.max(parsed, 1), 200) : 20;
+        enforcePageCacheLimit();
+        persistPageCache();
+        return pageCacheLimit;
+    }
+
+    function setPageCacheEntry(key, data) {
+        if (!key || !data) return;
+        const previous = pageCache.get(key);
+        if (previous) pageCache.delete(key);
+        pageCache.set(key, {
+            data,
+            scrollY: previous?.scrollY || 0,
+            updatedAt: Date.now(),
+            lastUsed: Date.now()
+        });
+        enforcePageCacheLimit();
+        persistPageCache();
+    }
+
+    function getPageCacheEntry(key) {
+        const entry = pageCache.get(key);
+        if (!entry) return null;
+        pageCache.delete(key);
+        entry.lastUsed = Date.now();
+        pageCache.set(key, entry);
+        persistPageCache();
+        return entry;
+    }
+
+    function updatePageCacheScroll(key, scrollY = window.scrollY) {
+        const entry = pageCache.get(key);
+        if (!entry) return;
+        entry.scrollY = scrollY;
+        entry.lastUsed = Date.now();
+        pageCache.set(key, entry);
+        persistPageCache();
+    }
+
+    function getBrowseCacheKey(category, page) {
+        return `browse:${category}:${page}`;
+    }
+
+    function getSearchCacheKey(page) {
+        return `search:${buildSearchParams(page).toString()}`;
+    }
+
+    function getParserCacheKey(url) {
+        return `parse:${String(url || "").trim()}`;
+    }
+
+    function getCurrentPageCacheKey() {
+        if (currentView !== "viewBrowse") return "";
+        if (currentBrowseMode === "search") return getSearchCacheKey(currentPage);
+        return getBrowseCacheKey(currentCategory, currentPage);
+    }
+
+    function rememberCurrentPageScroll() {
+        updatePageCacheScroll(getCurrentPageCacheKey());
+    }
+
+    function restoreCachedBrowsePage(key) {
+        const entry = getPageCacheEntry(key);
+        if (!entry) return false;
+        browseLoader.classList.add("hidden");
+        applyBrowseResult(entry.data);
+        window.requestAnimationFrame(() => {
+            window.scrollTo({ top: Number(entry.scrollY || 0), behavior: "auto" });
+        });
+        return true;
+    }
+
+    function restoreCachedParserPage(url) {
+        const entry = getPageCacheEntry(getParserCacheKey(url));
+        if (!entry) return false;
+        prepareParserLoading(url, false);
+        renderUi(entry.data);
+        window.requestAnimationFrame(() => {
+            window.scrollTo({ top: 0, behavior: "auto" });
+            window.setTimeout(() => window.scrollTo({ top: 0, behavior: "auto" }), 0);
+        });
+        return true;
+    }
+
+    function clearPageCache() {
+        pageCache.clear();
+        try {
+            window.sessionStorage?.removeItem(PAGE_CACHE_STORAGE_KEY);
+        } catch (_error) {
+            // Ignore storage failures; in-memory cache has already been cleared.
+        }
+        updatePageCacheStatus();
+    }
+
+    function updatePageCacheStatus(message = "") {
+        const pageCacheStatus = document.getElementById("pageCacheStatus");
+        if (!pageCacheStatus) return;
+        pageCacheStatus.textContent = message || `已缓存 ${pageCache.size}/${pageCacheLimit} 个页面`;
     }
 
     function proxyImageUrl(url) {
@@ -647,10 +796,12 @@ document.addEventListener("DOMContentLoaded", () => {
             if (isPlaylist) {
                 const listId = new URL(vid.url).searchParams.get("list");
                 if (listId) {
+                    rememberCurrentPageScroll();
                     loadBrowseCategory("playlist:" + listId, 1, true);
                     return;
                 }
             }
+            rememberCurrentPageScroll();
             urlInput.value = vid.url;
             switchView("viewParser", false);
             parseBtn.click();
@@ -726,11 +877,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (vid.url.includes("playlist?list=")) {
                 const listId = new URL(vid.url).searchParams.get("list");
                 if (listId) {
+                    rememberCurrentPageScroll();
                     switchView("viewBrowse", false);
                     loadBrowseCategory("playlist:" + listId, 1, true);
                     return;
                 }
             }
+            rememberCurrentPageScroll();
             urlInput.value = vid.url;
             switchView("viewParser", false);
             parseBtn.click();
@@ -902,6 +1055,7 @@ document.addEventListener("DOMContentLoaded", () => {
         currentBrowseMode = "search";
         currentPage = page;
         currentSearchState = normalizeSearchState(currentSearchState);
+        const cacheKey = getSearchCacheKey(page);
         syncSearchTypeControls();
         syncGlobalSearchChrome();
         switchView("viewBrowse", false);
@@ -915,13 +1069,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
         videoGrid.innerHTML = "";
         browseLoader.classList.remove("hidden");
+        if (restoreCachedBrowsePage(cacheKey)) {
+            return;
+        }
 
         try {
             const response = await fetch(`/api/search?${buildSearchParams(page).toString()}`);
             if (!response.ok) {
                 throw new Error(await response.text() || "搜索失败");
             }
-            applyBrowseResult(await response.json());
+            const data = await response.json();
+            setPageCacheEntry(cacheKey, data);
+            applyBrowseResult(data);
+            window.scrollTo({ top: 0, behavior: "auto" });
         } catch (error) {
             browseLoader.classList.add("hidden");
             videoGrid.innerHTML = `<div style="color:red; padding: 2rem; text-align: center;">搜索异常: ${escapeHtml(error.message)}</div>`;
@@ -972,8 +1132,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function historyCoverUrl(task) {
-        if (!task || !task.id) return "";
-        return `/api/local-cover/${encodeURIComponent(task.id)}`;
+        if (!task || (!task.pageUrl && !task.thumbnail)) return "";
+        const params = new URLSearchParams();
+        params.set("url", task.pageUrl || task.thumbnail || "");
+        if (task.thumbnail) {
+            params.set("thumbnail", task.thumbnail);
+        }
+        return `/api/proxy/history-cover?${params.toString()}`;
     }
 
     // 封面图片横竖检测
@@ -1382,8 +1547,136 @@ document.addEventListener("DOMContentLoaded", () => {
 
     }
 
+    function renderCommentAvatar(comment, className = "comment-avatar") {
+        const userName = comment?.userName || "?";
+        if (comment?.avatarUrl) {
+            return `<img class="${className}" src="${imageUrl(comment.avatarUrl)}" alt="avatar" loading="lazy">`;
+        }
+        return `<div class="${className} placeholder">${escapeHtml(userName.slice(0, 1))}</div>`;
+    }
+
+    function renderComments(comments = []) {
+        const list = Array.isArray(comments) ? comments : [];
+        if (!commentsList || !commentsCount) return;
+        commentsCount.textContent = list.length;
+
+        if (list.length === 0) {
+            commentsList.innerHTML = `<div class="empty-playlist">暂无评论</div>`;
+            return;
+        }
+
+        commentsList.innerHTML = list.map((comment) => {
+            const commentId = escapeHtml(comment.commentId || "");
+            const avatar = renderCommentAvatar(comment);
+            const replyCount = Number(comment.replyCount || 0);
+            const canLoadReplies = comment.commentId && (comment.hasReplies || replyCount > 0);
+            return `
+                <article class="comment-item" data-comment-id="${commentId}">
+                    ${avatar}
+                    <div class="comment-body">
+                        <div class="comment-head">
+                            <strong>${escapeHtml(comment.userName || "匿名用户")}</strong>
+                            ${comment.timeText ? `<span>${escapeHtml(comment.timeText)}</span>` : ""}
+                        </div>
+                        <div class="comment-content">${escapeHtml(comment.content || "")}</div>
+                        <div class="comment-actions">
+                            ${comment.likeCount ? `<span>${escapeHtml(comment.likeCount)} 赞</span>` : ""}
+                            ${canLoadReplies ? `<button class="comment-reply-btn" type="button" data-comment-id="${commentId}">查看回复${replyCount ? ` (${replyCount})` : ""}</button>` : ""}
+                        </div>
+                        <div class="comment-replies" data-replies-for="${commentId}"></div>
+                    </div>
+                </article>
+            `;
+        }).join("");
+    }
+
+    function renderReplies(commentId, replies = []) {
+        const repliesBox = commentsList?.querySelector(`[data-replies-for="${CSS.escape(commentId)}"]`);
+        if (!repliesBox) return;
+        const list = Array.isArray(replies) ? replies : [];
+        if (list.length === 0) {
+            repliesBox.innerHTML = `<div class="comment-reply-empty">暂无回复</div>`;
+            return;
+        }
+        repliesBox.innerHTML = list.map((reply) => {
+            const replyAvatar = renderCommentAvatar({
+                userName: reply.userName,
+                avatarUrl: reply.avatarUrl
+            }, "comment-reply-avatar");
+            return `
+                <div class="comment-reply-item">
+                    ${replyAvatar}
+                    <div class="comment-reply-body">
+                        <strong>${escapeHtml(reply.userName || "匿名用户")}</strong>
+                        <span>${escapeHtml(reply.content || "")}</span>
+                    </div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    async function loadComments(videoId) {
+        if (!commentsList || !commentsCount) return;
+        if (!videoId) {
+            commentsCount.textContent = "0";
+            commentsList.innerHTML = `<div class="empty-playlist">未识别到视频 ID，无法载入评论</div>`;
+            return;
+        }
+
+        commentsList.innerHTML = `<div class="empty-playlist">正在载入评论...</div>`;
+        try {
+            const response = await fetch(`/api/comments?videoId=${encodeURIComponent(videoId)}`);
+            if (!response.ok) {
+                throw new Error(await response.text() || "评论载入失败");
+            }
+            renderComments(await response.json());
+        } catch (error) {
+            commentsCount.textContent = "0";
+            commentsList.innerHTML = `<div class="empty-playlist">评论载入失败: ${escapeHtml(error.message)}</div>`;
+        }
+    }
+
+    async function loadReplies(commentId, button) {
+        if (!commentId) return;
+        const repliesBox = commentsList?.querySelector(`[data-replies-for="${CSS.escape(commentId)}"]`);
+        if (repliesBox) {
+            repliesBox.innerHTML = `<div class="comment-reply-empty">正在载入回复...</div>`;
+        }
+        if (button) button.disabled = true;
+        try {
+            const response = await fetch(`/api/replies?commentId=${encodeURIComponent(commentId)}`);
+            if (!response.ok) {
+                throw new Error(await response.text() || "回复载入失败");
+            }
+            renderReplies(commentId, await response.json());
+        } catch (error) {
+            if (repliesBox) {
+                repliesBox.innerHTML = `<div class="comment-reply-empty">回复载入失败: ${escapeHtml(error.message)}</div>`;
+            }
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
+    function setDetailTab(tabName) {
+        const activeTab = tabName === "comments" ? "comments" : "related";
+        document.querySelectorAll("[data-detail-tab]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.detailTab === activeTab);
+        });
+        [detailPanelRelated, detailPanelComments].forEach((panel) => {
+            if (!panel) return;
+            const isActive = panel.dataset.detailPanel === activeTab;
+            panel.classList.toggle("active", isActive);
+            panel.classList.toggle("hidden", !isActive);
+        });
+    }
+
     // ---- Navigation / SPA Routing ----
     function switchView(viewId, pushState = true) {
+        if (currentView === "viewBrowse" && viewId !== "viewBrowse") {
+            rememberCurrentPageScroll();
+        }
+        currentView = viewId;
         viewLanding.classList.add("hidden");
         viewBrowse.classList.add("hidden");
         viewParser.classList.add("hidden");
@@ -1427,7 +1720,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     liToActivate.classList.add("active");
                 }
             } else if (state.view === "viewParser" && state.url) {
-                urlInput.value = state.url;
+                loadParserUrl(state.url, false, true);
             }
         }
     }
@@ -1674,6 +1967,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // ---- Settings API ----
     settingsBtn.addEventListener("click", async () => {
         settingsModal.classList.remove("hidden");
+        updatePageCacheStatus();
 
         // fetch available browsers dynamically
         try {
@@ -1699,6 +1993,9 @@ document.addEventListener("DOMContentLoaded", () => {
             downloadDirInput.value = data.downloadDirectory || "";
             if (maxConcurrentDownloadsInput) {
                 maxConcurrentDownloadsInput.value = data.maxConcurrentDownloads || 3;
+            }
+            if (pageCacheLimitInput) {
+                pageCacheLimitInput.value = applyPageCacheLimit(data.pageCacheLimit || 20);
             }
             if (gopeedHostInput) {
                 gopeedHostInput.value = data.gopeedHost || "127.0.0.1";
@@ -1746,6 +2043,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 clearCacheBtn.disabled = false;
                 clearCacheBtn.innerText = '🧹 清除本地缓存';
             }
+        });
+    }
+
+    const clearPageCacheBtn = document.getElementById("clearPageCacheBtn");
+    if (clearPageCacheBtn) {
+        clearPageCacheBtn.addEventListener("click", () => {
+            clearPageCache();
+            updatePageCacheStatus("页面缓存已清除");
         });
     }
 
@@ -1805,6 +2110,11 @@ document.addEventListener("DOMContentLoaded", () => {
             return alert("并行下载数量必须在 1 到 12 之间");
         }
 
+        const pageCacheLimitValue = Number.parseInt(pageCacheLimitInput?.value || "20", 10);
+        if (!Number.isInteger(pageCacheLimitValue) || pageCacheLimitValue < 1 || pageCacheLimitValue > 200) {
+            return alert("页面缓存数量必须在 1 到 200 之间");
+        }
+
         const gopeedHost = gopeedHostInput?.value.trim() || "127.0.0.1";
         if (!gopeedHost) return alert("Gopeed 主机地址不能为空");
 
@@ -1834,6 +2144,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 body: JSON.stringify({
                     downloadDirectory,
                     maxConcurrentDownloads,
+                    pageCacheLimit: pageCacheLimitValue,
                     gopeedHost,
                     gopeedPort,
                     gopeedToken,
@@ -1843,6 +2154,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 })
             });
             if (res.ok) {
+                applyPageCacheLimit(pageCacheLimitValue);
                 alert("全局设置已保存！新的配置将立即生效。");
                 settingsModal.classList.add("hidden");
             } else {
@@ -1940,19 +2252,12 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // ---- Parse Flow ----
-    parseBtn.addEventListener("click", async () => {
-        const url = urlInput.value.trim();
-        if (!url) {
-            alert("请粘贴视频链接");
-            return;
-        }
-        
-        // Push state for history before fetching
-        history.pushState({ view: "viewParser", url: url }, "", `#parse?v=${encodeURIComponent(url)}`);
-
+    function prepareParserLoading(url, resetLog = true) {
+        switchView("viewParser", false);
+        urlInput.value = url;
         emptyState.classList.add("hidden");
         previewContent.classList.remove("hidden");
-        logConsole.innerHTML = "";
+        if (resetLog) logConsole.innerHTML = "";
         
         // reset player state
         if(hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
@@ -1974,8 +2279,29 @@ document.addEventListener("DOMContentLoaded", () => {
         playlistContainer.innerHTML = `<div class="empty-playlist">暂无影片序列</div>`;
         relatedVideoCount.textContent = "0";
         relatedVideoGrid.innerHTML = `<div class="empty-playlist">暂无相关视频</div>`;
+        if (commentsCount) commentsCount.textContent = "0";
+        if (commentsList) commentsList.innerHTML = `<div class="empty-playlist">正在等待解析结果</div>`;
         updateSeriesDownloadButton();
         updatePlaylistPanelLayout();
+    }
+
+    async function loadParserUrl(url, pushState = true, preferCache = true) {
+        const normalizedUrl = String(url || "").trim();
+        if (!normalizedUrl) {
+            alert("请粘贴视频链接");
+            return;
+        }
+
+        if (pushState) {
+            history.pushState({ view: "viewParser", url: normalizedUrl }, "", `#parse?v=${encodeURIComponent(normalizedUrl)}`);
+        }
+
+        if (preferCache && restoreCachedParserPage(normalizedUrl)) {
+            return;
+        }
+
+        prepareParserLoading(normalizedUrl);
+        window.scrollTo({ top: 0, behavior: "auto" });
 
         log("初始化探针引力引擎...", "info");
         log("调用本地代理规避侦测...", "info");
@@ -1983,12 +2309,12 @@ document.addEventListener("DOMContentLoaded", () => {
         scheduleCfModal();
 
         try {
-            log(`目标源: ${url}`, "info");
+            log(`目标源: ${normalizedUrl}`, "info");
 
             const response = await fetch("/api/parse", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ url })
+                body: JSON.stringify({ url: normalizedUrl })
             });
 
             hideCfModal();
@@ -2001,12 +2327,18 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await response.json();
             log("✅ 侦测成功，核心资源地址锁定！", "info");
 
+            setPageCacheEntry(getParserCacheKey(normalizedUrl), data);
             renderUi(data);
+            window.scrollTo({ top: 0, behavior: "auto" });
 
         } catch (error) {
             hideCfModal();
             log(`❌ 解析异常中断: ${error.message}`, "error");
         }
+    }
+
+    parseBtn.addEventListener("click", async () => {
+        await loadParserUrl(urlInput.value, true, true);
     });
 
     function renderUi(data) {
@@ -2088,6 +2420,8 @@ document.addEventListener("DOMContentLoaded", () => {
         updatePlaylistPanelLayout();
 
         renderRelatedVideoGrid(data.relatedVideos || []);
+        setDetailTab("related");
+        loadComments(data.videoId || "");
     }
 
     startDownloadBtn.addEventListener("click", async () => {
@@ -2134,6 +2468,22 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    if (commentsList) {
+        commentsList.addEventListener("click", (event) => {
+            const replyButton = event.target.closest(".comment-reply-btn[data-comment-id]");
+            if (!replyButton) return;
+            loadReplies(replyButton.dataset.commentId, replyButton);
+        });
+    }
+
+    if (mediaDetailTabs) {
+        mediaDetailTabs.addEventListener("click", (event) => {
+            const tabButton = event.target.closest("[data-detail-tab]");
+            if (!tabButton) return;
+            setDetailTab(tabButton.dataset.detailTab);
+        });
+    }
+
     navLogo.onclick = () => switchView('viewLanding');
 
     // ---- Browse Classification Logic ----
@@ -2151,6 +2501,7 @@ document.addEventListener("DOMContentLoaded", () => {
         currentBrowseMode = "category";
         currentCategory = category;
         currentPage = page;
+        const cacheKey = getBrowseCacheKey(category, page);
         
         const grid = document.getElementById('videoGrid');
         const loader = document.getElementById('browseLoader');
@@ -2180,6 +2531,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         grid.innerHTML = '';
         loader.classList.remove('hidden');
+        if (restoreCachedBrowsePage(cacheKey)) {
+            return;
+        }
 
         try {
             const resp = await fetch(`/api/browse?category=${encodeURIComponent(category)}&page=${page}`);
@@ -2188,7 +2542,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 throw new Error(errText || "无法获取该分类资源，可能被盾");
             }
             
-            applyBrowseResult(await resp.json());
+            const data = await resp.json();
+            setPageCacheEntry(cacheKey, data);
+            applyBrowseResult(data);
+            window.scrollTo({ top: 0, behavior: "auto" });
 
         } catch (err) {
             loader.classList.add("hidden");
@@ -2295,6 +2652,8 @@ document.addEventListener("DOMContentLoaded", () => {
     loadSearchOptions();
     syncSearchTypeControls();
     syncGlobalSearchChrome();
+    setDetailTab("related");
+    updatePageCacheStatus();
     renderDownloadCenter();
     fetchDownloadSnapshot();
     connectDownloadStream();
