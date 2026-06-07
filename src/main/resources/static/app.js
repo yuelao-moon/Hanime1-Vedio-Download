@@ -1799,10 +1799,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function addCardToWatchLater(vid, button) {
-        if (!requireLogin()) {
-            log("用户未登录，跳过稍后观看操作", "warning");
-            return;
-        }
+        if (!requireLogin()) return;
         button.disabled = true;
         const isAdded = watchLaterCardState.get(vid.url) || false;
         const newState = !isAdded;
@@ -1811,15 +1808,12 @@ document.addEventListener("DOMContentLoaded", () => {
             pageUrl: vid.url,
             isChecked: newState
         };
-        log(`稍后观看操作: videoId=${payload.videoId}, pageUrl=${payload.pageUrl}, isChecked=${newState}`, "info");
         try {
             const result = await postJson("/api/video/watch-later", payload);
-            log(`稍后观看操作成功: ${JSON.stringify(result)}`, "info");
             watchLaterCardState.set(vid.url, newState);
             button.textContent = newState ? "✓ 稍后" : "+ 稍后";
             button.classList.toggle("selected-action", newState);
         } catch (error) {
-            log(`稍后观看操作失败: ${error.message}`, "error");
             alert(`稍后观看操作失败: ${error.message}`);
         } finally {
             button.disabled = false;
