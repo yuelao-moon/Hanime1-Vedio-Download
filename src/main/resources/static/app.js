@@ -1909,8 +1909,8 @@ document.addEventListener("DOMContentLoaded", () => {
         // Render section frameworks immediately
         if (profileSections) {
             profileSections.innerHTML = "";
-            const sections = ["watchLater", "likes", "playlists", "subscriptions"];
-            const titles = { watchLater: "稍后观看", likes: "喜欢的影片", playlists: "播放清单", subscriptions: "我的订阅" };
+            const sections = ["watchLater", "likes", "playlists", "subscriptions", "histories"];
+            const titles = { watchLater: "稍后观看", likes: "喜欢的影片", playlists: "播放清单", subscriptions: "我的订阅", histories: "浏览记录" };
             sections.forEach(section => {
                 const row = document.createElement("section");
                 row.className = "profile-section-row";
