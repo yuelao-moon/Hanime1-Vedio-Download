@@ -437,9 +437,18 @@ def extract_cards(nodes: list[Node], current_url: str) -> list[dict[str, str]]:
                 # Normalize spaces
                 creator = re.sub(r"\s+", " ", creator).strip()
             
+        # Extract videoId from URL (e.g., https://hanime1.me/watch?v=405748)
+        video_id = ""
+        if "watch?v=" in url:
+            try:
+                video_id = url.split("watch?v=")[-1].split("&")[0].strip()
+            except Exception:
+                pass
+
         items.append({
-            "url": url, 
-            "thumbnail": image, 
+            "url": url,
+            "videoId": video_id,
+            "thumbnail": image,
             "title": normalize_title(title),
             "duration": duration,
             "likes": likes,
