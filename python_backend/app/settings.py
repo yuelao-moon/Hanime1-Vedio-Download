@@ -16,6 +16,7 @@ class AppSettings:
     gopeedToken: str = ""
     gopeedConnections: int = 16
     pageCacheLimit: int = 20
+    maxLocalCacheSizeGB: float = 5.0
     shortcutBack: str = "Alt+ArrowLeft"
     shortcutForward: str = "Alt+ArrowRight"
 
@@ -28,6 +29,7 @@ class AppSettings:
         self.gopeedHost = (self.gopeedHost or "127.0.0.1").strip() or "127.0.0.1"
         self.gopeedToken = (self.gopeedToken or "").strip()
         self.pageCacheLimit = clamp(self.pageCacheLimit, 1, 200, 20)
+        self.maxLocalCacheSizeGB = clamp_float(self.maxLocalCacheSizeGB, 0.5, 100.0, 5.0)
         self.shortcutBack = normalize_shortcut(self.shortcutBack, "Alt+ArrowLeft")
         self.shortcutForward = normalize_shortcut(self.shortcutForward, "Alt+ArrowRight")
 
@@ -41,6 +43,7 @@ class AppSettings:
             gopeedToken=value.get("gopeedToken", ""),
             gopeedConnections=value.get("gopeedConnections", 16),
             pageCacheLimit=value.get("pageCacheLimit", 20),
+            maxLocalCacheSizeGB=value.get("maxLocalCacheSizeGB", 5.0),
             shortcutBack=value.get("shortcutBack", "Alt+ArrowLeft"),
             shortcutForward=value.get("shortcutForward", "Alt+ArrowRight"),
         )
@@ -98,6 +101,14 @@ def clamp(value: int, minimum: int, maximum: int, fallback: int) -> int:
     if parsed < minimum or parsed > maximum:
         return fallback if parsed < minimum or parsed > maximum and maximum == 65535 else min(max(parsed, minimum), maximum)
     return parsed
+
+
+def clamp_float(value: float, minimum: float, maximum: float, fallback: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(max(parsed, minimum), maximum)
 
 
 def normalize_shortcut(value: str, fallback: str) -> str:

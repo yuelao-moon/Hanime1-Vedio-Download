@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 import httpx
 from selectolax.parser import HTMLParser
 
-from .parser import extract_video_page, looks_like_blocked_page, parse_total_pages, parse_video_grid, parse_home_page, parse_playlist_grid
+from .parser import extract_video_page, looks_like_blocked_page, parse_total_pages, parse_video_grid, parse_home_page, parse_playlist_grid, parse_subscription_creators, parse_query_creator_info
 from .paths import app_home
 from .settings import AppSettings
 from .account import AccountSession, parse_home_user
@@ -191,6 +191,16 @@ class HanimeScraper:
                 "isPlaylistPage": True
             }
             
+        if category.startswith("query:"):
+            search_query = category[6:]
+            url = f"https://hanime1.me/search?{urlencode({'query': search_query, 'page': max(page, 1)})}"
+            html = await self.fetch_html(url, "https://hanime1.me/")
+            creator_info = parse_query_creator_info(html)
+            result = {"videos": parse_video_grid(html), "currentPage": page, "totalPages": parse_total_pages(html, page)}
+            if creator_info:
+                result.update(creator_info)
+            return result
+
         query = urlencode({"genre": category, "page": max(page, 1)})
         url = f"https://hanime1.me/search?{query}"
         html = await self.fetch_html(url, "https://hanime1.me/")
@@ -269,7 +279,12 @@ class HanimeScraper:
         if section not in paths:
             raise ValueError("未知个人主页板块")
         html = await self.fetch_html(paths[section], "https://hanime1.me/")
-        items = parse_playlist_grid(html) if section == "playlists" else parse_video_grid(html)
+        if section == "playlists":
+            items = parse_playlist_grid(html)
+        elif section == "subscriptions":
+            items = parse_subscription_creators(html)
+        else:
+            items = parse_video_grid(html)
         return {
             "section": section,
             "title": PROFILE_SECTION_TITLES.get(section, section),

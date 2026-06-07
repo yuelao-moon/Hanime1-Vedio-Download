@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hanime Media Center</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=3.3">
+    <link rel="stylesheet" href="style.css?v=3.7">
     <!-- Include HLS.js for streaming m3u8 videos -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
@@ -184,8 +184,9 @@
                         <button class="btn-secondary" id="profileBackBtn" type="button">返回</button>
                         <h2 id="profileSectionTitle">个人内容</h2>
                     </div>
+                    <div class="subscription-creator-strip hidden" id="subscriptionCreatorStrip"></div>
                     <div class="profile-preview-row" id="profileSectionGrid"></div>
-                    <div class="action-bar" style="justify-content:center;margin-top:1rem;">
+                    <div class="action-bar" id="profilePaginationBar" style="justify-content:center;margin-top:1rem;">
                         <button class="btn-secondary" id="profilePrevPageBtn" type="button">上一页</button>
                         <span id="profilePageIndicator" style="color:var(--text-muted);"></span>
                         <button class="btn-secondary" id="profileNextPageBtn" type="button">下一页</button>
@@ -379,6 +380,11 @@
                     <input type="number" id="gopeedConnections" min="1" max="128" step="1" placeholder="16">
                     <small class="help-text">默认 16，最大 128。</small>
                 </div>
+                <div class="form-group">
+                    <label for="maxLocalCacheSizeGB">图片缓存上限 (GB)</label>
+                    <input type="number" id="maxLocalCacheSizeGB" min="0.5" max="100" step="0.5" placeholder="5">
+                    <small class="help-text">默认 5 GB，缓存封面图片到本地加速加载。</small>
+                </div>
             </div>
 
             <div class="settings-grid-2">
@@ -413,10 +419,6 @@
                 <span id="updateResult" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
             </div>
 
-            <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
-                <button class="btn-secondary" id="clearPageCacheBtn" title="清除分类和搜索页面缓存" style="border-color: rgba(100, 200, 255, 0.3); color: #6bc5ff;">清除页面缓存</button>
-                <span id="pageCacheStatus" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
-            </div>
 
             <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
                 <button class="btn-secondary" id="refreshCookieBtn" title="打开浏览器刷新 cf_clearance Cookie" style="border-color: rgba(100, 200, 255, 0.3); color: #6bc5ff;">刷新 Cookie</button>
@@ -519,6 +521,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=3.3"></script>
+    <script src="app.js?v=3.7"></script>
 </body>
 </html>

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs, urlencode
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
@@ -193,7 +196,66 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
         html_cache = getattr(scraper, "_html_cache", None)
         if isinstance(html_cache, dict):
             html_cache.clear()
+        img_cache_dir = home / "img_cache"
+        if img_cache_dir.exists():
+            shutil.rmtree(img_cache_dir, ignore_errors=True)
         return {"ok": True}
+
+    @app.get("/api/creator/info")
+    async def creator_info(userId: str = ""):
+        if not userId:
+            return {"avatarUrl": ""}
+        try:
+            from .parser import parse_creator_avatar_from_profile
+            url = f"https://hanime1.me/user/{userId}"
+            html = await scraper.fetch_html(url, "https://hanime1.me/")
+            avatar = parse_creator_avatar_from_profile(html)
+            return {"avatarUrl": avatar or ""}
+        except Exception:
+            return {"avatarUrl": ""}
+
+    @app.get("/api/creator/by-name")
+    async def creator_by_name(name: str = ""):
+        """Resolve creator avatar/id by searching for their name.
+
+        Strategy:
+          1. Search videos by name → get first video URL (cached)
+          2. Parse video page → extract artistId from subscribe form (cached)
+          3. Fetch creator profile page → parse real avatar (cached)
+        All three fetches go through the HTML cache so repeated calls are instant.
+        """
+        if not name:
+            return {"creatorId": "", "avatarUrl": "", "creatorName": name}
+        try:
+            from urllib.parse import urlencode as _enc
+            from .parser import parse_video_grid as _pvg, extract_video_page as _evp, parse_creator_avatar_from_profile as _pcap
+            search_url = f"https://hanime1.me/search?{_enc({'query': name, 'page': 1})}"
+            search_html = await scraper.fetch_html(search_url, "https://hanime1.me/")
+            videos = _pvg(search_html)
+            first_url = next((v.get("url") for v in videos if v.get("url")), None)
+            if not first_url:
+                return {"creatorId": "", "avatarUrl": "", "creatorName": name}
+            video_html = await scraper.fetch_html(first_url, "https://hanime1.me/")
+            data = _evp(first_url, video_html)
+            creator = data.get("creator") or {}
+            # artistId from subscribe form is the true creator ID (not the nav user ID)
+            creator_post = creator.get("post") or {}
+            artist_id = creator_post.get("artistId", "") or creator.get("id", "")
+            creator_name = creator.get("name", "") or name
+            # Fetch real avatar from creator profile page
+            avatar_url = ""
+            if artist_id:
+                profile_html = await scraper.fetch_html(
+                    f"https://hanime1.me/user/{artist_id}", "https://hanime1.me/"
+                )
+                avatar_url = _pcap(profile_html)
+            return {
+                "creatorId": artist_id,
+                "avatarUrl": avatar_url or "",
+                "creatorName": creator_name,
+            }
+        except Exception:
+            return {"creatorId": "", "avatarUrl": "", "creatorName": name}
 
     @app.get("/api/page-cache")
     async def get_page_cache(key: str):
@@ -308,6 +370,37 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/api/debug/subscription-html")
+    async def debug_subscription_html():
+        """Diagnostic: inspect subscription page video card structure."""
+        user = await auth_me()
+        if not user.get("loggedIn"):
+            raise HTTPException(status_code=401, detail="请先登录")
+        html = await scraper.fetch_html("https://hanime1.me/subscriptions?page=1", "https://hanime1.me/")
+        from selectolax.parser import HTMLParser as _P
+        import re as _re
+        tree = _P(html)
+        # Show outer HTML of first 3 video card containers to reveal structure
+        video_cards = []
+        for a in tree.css("a[href*='watch?v=']")[:3]:
+            # Walk up to find a meaningful container
+            container = a.parent or a
+            if container.parent:
+                container = container.parent
+            raw = container.html or ""
+            video_cards.append(raw[:1500])
+        # All user links
+        user_links = [
+            {"href": lk.attributes.get("href", ""), "cls": lk.attributes.get("class", ""), "text": lk.text(strip=True)[:80]}
+            for lk in tree.css('a[href*="/user/"]')
+        ]
+        # Subtitle elements
+        subtitles = [
+            {"tag": s.tag, "cls": s.attributes.get("class",""), "html": (s.html or "")[:300]}
+            for s in tree.css(".subtitle")[:5]
+        ]
+        return {"userLinks": user_links, "videoCards": video_cards, "subtitles": subtitles}
+
     @app.get("/api/check-update")
     async def check_update():
         return {"currentVersion": "1.0.0", "hasUpdate": False, "latestVersion": "1.0.0", "downloadUrl": "", "releaseNotes": ""}
@@ -371,8 +464,36 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
         return StreamingResponse(events(), media_type="text/event-stream")
 
     @app.get("/api/proxy/image")
-    async def proxy_image(url: str):
+    async def proxy_image(url: str, request: Request):
+        img_cache_dir = home / "img_cache"
+        if url:
+            cache_bin, cache_meta = _img_cache_paths(img_cache_dir, url)
+            if cache_bin.exists() and cache_meta.exists():
+                try:
+                    ct = cache_meta.read_text(encoding="utf-8").strip()
+                    etag = f'"{cache_bin.stat().st_size}"'
+                    if request.headers.get("if-none-match") == etag:
+                        return Response(status_code=304)
+                    content = cache_bin.read_bytes()
+                    cache_bin.touch()
+                    return Response(content, media_type=ct, headers={
+                        "Cache-Control": "public, max-age=604800, immutable",
+                        "ETag": etag,
+                    })
+                except Exception:
+                    pass
         content, content_type = await scraper.fetch_bytes(url, "https://hanime1.me/")
+        if url and content:
+            try:
+                cache_bin, cache_meta = _img_cache_paths(img_cache_dir, url)
+                cache_bin.parent.mkdir(parents=True, exist_ok=True)
+                cache_bin.write_bytes(content)
+                cache_meta.write_text(content_type, encoding="utf-8")
+                settings = settings_store.load()
+                max_bytes = int(float(settings.maxLocalCacheSizeGB) * 1024 ** 3)
+                _evict_img_cache(img_cache_dir, max_bytes)
+            except Exception:
+                pass
         return Response(content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
 
     @app.get("/api/proxy/history-cover")
@@ -407,6 +528,39 @@ async def call_download(factory):
         return await factory()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _img_cache_paths(cache_dir: Path, url: str) -> tuple[Path, Path]:
+    # Strip time-limited auth tokens (secure=) so the disk cache survives token rotation.
+    try:
+        parsed = urlparse(url)
+        qs = {k: v[0] for k, v in parse_qs(parsed.query).items() if k != "secure"}
+        stable_url = parsed._replace(query=urlencode(qs)).geturl()
+    except Exception:
+        stable_url = url
+    h = hashlib.md5(stable_url.encode()).hexdigest()
+    base = cache_dir / h[:2] / h
+    return base.with_suffix(".bin"), base.with_suffix(".meta")
+
+
+def _evict_img_cache(cache_dir: Path, max_bytes: int) -> None:
+    if not cache_dir.exists():
+        return
+    try:
+        files = sorted(cache_dir.rglob("*.bin"), key=lambda f: f.stat().st_mtime)
+        total = sum(f.stat().st_size for f in files if f.exists())
+        if total <= max_bytes:
+            return
+        target = int(max_bytes * 0.85)
+        for f in files:
+            if total <= target:
+                break
+            sz = f.stat().st_size
+            f.unlink(missing_ok=True)
+            f.with_suffix(".meta").unlink(missing_ok=True)
+            total -= sz
+    except Exception:
+        pass
 
 
 def log_cookie_task_result(task: asyncio.Task) -> None:

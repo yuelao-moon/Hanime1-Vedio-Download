@@ -509,6 +509,155 @@ def absolutize_watch_url(href: str, current_url: str) -> str | None:
     return urljoin(current_url if current_url.startswith("http") else BASE_URL, href)
 
 
+def parse_subscription_creators(html: str, exclude_user_id: str = "") -> list[dict]:
+    """Extract subscribed creator list from the subscriptions page."""
+    tree = HTMLParser(html or "")
+
+    # Build a page-wide map: user_id -> (avatar_url, link_text)
+    user_link_map: dict[str, tuple[str, str]] = {}
+    for a in tree.css("a[href*='/user/']"):
+        href = a.attributes.get("href", "")
+        m = re.search(r"/user/(\d+)", href)
+        if not m:
+            continue
+        uid = m.group(1)
+        if uid in user_link_map:
+            continue
+        img = a.css_first("img")
+        avatar = ""
+        if img:
+            avatar = img.attributes.get("src") or img.attributes.get("data-src") or ""
+        user_link_map[uid] = (avatar, a.text(strip=True))
+
+    creators: list[dict] = []
+    seen: set[str] = set()
+
+    for subtitle in tree.css("div.subtitle"):
+        a = subtitle.css_first("a[href*='search?query=']")
+        if not a:
+            continue
+
+        href = a.attributes.get("href", "") or ""
+        qs = parse_qs(urlparse(href).query)
+        query_vals = qs.get("query", [])
+        if not query_vals:
+            continue
+        search_query = query_vals[0].strip()
+        if not search_query or search_query in seen:
+            continue
+
+        raw_text = a.text(strip=True)
+        name = re.sub(r"\s*[•·]\s*.+$", "", raw_text).strip() or search_query
+        name_lower = name.lower()
+
+        # Method 1: user link in parent containers (up to 5 levels)
+        user_id = ""
+        avatar_url = ""
+        container = subtitle.parent
+        for _ in range(5):
+            if container is None:
+                break
+            user_link = container.css_first("a[href*='/user/']")
+            if user_link:
+                user_href = user_link.attributes.get("href", "")
+                m2 = re.search(r"/user/(\d+)", user_href)
+                if m2:
+                    user_id = m2.group(1)
+                img = user_link.css_first("img")
+                if img:
+                    avatar_url = img.attributes.get("src") or img.attributes.get("data-src") or ""
+                break
+            container = container.parent
+
+        # Method 2: match by creator name across all user links on page
+        if not user_id:
+            for uid, (av, text) in user_link_map.items():
+                text_lower = text.lower()
+                if text_lower and (name_lower in text_lower or text_lower in name_lower):
+                    user_id = uid
+                    avatar_url = av
+                    break
+
+        seen.add(search_query)
+        creators.append({
+            "name": name,
+            "searchQuery": search_query,
+            "userId": user_id,
+            "avatarUrl": avatar_url,
+            "isCreator": True,
+        })
+
+    return creators
+
+
+def parse_query_creator_info(html: str) -> dict:
+    """Extract creator info from a search-by-name results page.
+
+    Looks for a[href*='/user/'] links that are co-located within the same
+    video-card container as a[href*='watch?v='] video links. This avoids
+    picking up the logged-in user's navigation avatar which is outside the grid.
+    """
+    tree = HTMLParser(html or "")
+    uid_info: dict[str, dict] = {}  # uid -> {avatar, name}
+
+    for video_link in tree.css("a[href*='watch?v=']"):
+        container = video_link.parent
+        user_link = None
+        for _ in range(6):
+            if container is None:
+                break
+            user_link = container.css_first("a[href*='/user/']")
+            if user_link:
+                break
+            container = container.parent
+
+        if not user_link:
+            continue
+        href = user_link.attributes.get("href", "")
+        m = re.search(r"/user/(\d+)", href)
+        if not m:
+            continue
+        uid = m.group(1)
+        if uid in uid_info:
+            continue
+        img = user_link.css_first("img")
+        avatar = ""
+        name = ""
+        if img:
+            avatar = img.attributes.get("src") or img.attributes.get("data-src") or ""
+            name = img.attributes.get("alt", "").strip()
+        if not name:
+            name = user_link.text(strip=True)
+        uid_info[uid] = {"avatar": avatar, "name": name}
+
+    if not uid_info:
+        return {}
+
+    uid, info = next(iter(uid_info.items()))
+    return {
+        "creatorId": uid,
+        "creatorAvatar": info.get("avatar", ""),
+        "creatorName": info.get("name", ""),
+    }
+
+
+def parse_creator_avatar_from_profile(html: str) -> str:
+    """Extract creator avatar URL from their profile page."""
+    tree = HTMLParser(html or "")
+    for selector in (
+        ".profile-avatar-wrapper img",
+        ".user-avatar img",
+        "img.avatar",
+        ".profile-avatar img",
+    ):
+        node = tree.css_first(selector)
+        if node:
+            src = node.attributes.get("src") or node.attributes.get("data-src") or ""
+            if src and src.startswith("http"):
+                return src
+    return ""
+
+
 def parse_playlist_grid(html: str) -> list[dict[str, str]]:
     tree = HTMLParser(html or "")
     nodes = tree.css("a[href*='playlist?list=']")
