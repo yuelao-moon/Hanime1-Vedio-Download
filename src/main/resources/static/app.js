@@ -1920,9 +1920,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <span>${escapeHtml(titles[section])}</span>
                         <span>查看全部</span>
                     </button>
-                    <div class="profile-preview-row" style="display: flex; gap: 1rem; flex-wrap: wrap; padding: 1rem; opacity: 0.6;">
-                        <div style="width: 100%; text-align: center;">加载中...</div>
-                    </div>
+                    <div class="profile-preview-row"></div>
                 `;
                 row.querySelector(".profile-section-heading").addEventListener("click", () => loadProfileSection(section, 1, true));
                 profileSections.appendChild(row);
@@ -1933,6 +1931,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function loadProfileSectionPreview(section, container) {
+        container.innerHTML = `<div class="empty-playlist">正在载入...</div>`;
         try {
             const response = await fetch(`/api/profile/section/${section}?page=1`);
             if (!response.ok) throw new Error("加载失败");

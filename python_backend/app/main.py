@@ -109,7 +109,10 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
         duration: str = "",
         page: int = 1,
     ):
-        return await scraper.search(query=query, type=type, genre=genre, tags=tags, sort=sort, date=date, duration=duration, page=page)
+        log.info(f"[search] 请求: query={query}, type={type}, genre={genre}, page={page}")
+        result = await scraper.search(query=query, type=type, genre=genre, tags=tags, sort=sort, date=date, duration=duration, page=page)
+        log.info(f"[search] 结果: {len(result.get('items', []))} 个视频")
+        return result
 
     @app.get("/api/search/options")
     async def search_options():
@@ -296,27 +299,40 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
 
     @app.post("/api/video/watch-later")
     async def video_watch_later(payload: dict):
+        log.info(f"[watch-later] 接收请求: {payload}")
         parsed = await resolve_video_payload(payload, scraper)
         token = require_text(parsed, "csrfToken", "缺少 CSRF token")
         video_id = require_text(parsed, "videoId", "缺少视频 ID")
         my_list = parsed.get("myList") or {}
         list_code = (payload.get("listCode") or my_list.get("watchLaterCode") or "").strip()
+        log.info(f"[watch-later] 初始: video_id={video_id}, list_code={list_code}, has_myList={bool(my_list)}")
+
         if not list_code and payload.get("pageUrl"):
+            log.info(f"[watch-later] 重新解析页面: {payload.get('pageUrl')}")
             parsed = await scraper.parse(str(payload.get("pageUrl") or f"https://hanime1.me/watch?v={video_id}"))
             my_list = parsed.get("myList") or {}
             list_code = str(my_list.get("watchLaterCode") or "").strip()
             token = str(parsed.get("csrfToken") or token).strip()
+            log.info(f"[watch-later] 重新解析后: list_code={list_code}, has_token={bool(token)}")
+
         if not list_code:
             list_code = "WL"
+            log.info(f"[watch-later] 使用默认 list_code=WL")
+
         if not list_code:
             raise HTTPException(status_code=400, detail="缺少稍后观看清单代码")
-        return await scraper.post_form("https://hanime1.me/save", {
+
+        form_data = {
             "_token": token,
             "input_id": list_code,
             "video_id": video_id,
             "is_checked": "1" if payload.get("isChecked", True) else "",
             "user_id": parsed.get("currentUserId") or "",
-        })
+        }
+        log.info(f"[watch-later] 提交表单: token={token[:20]}..., input_id={list_code}, video_id={video_id}, is_checked={form_data['is_checked']}, user_id={form_data['user_id']}")
+        result = await scraper.post_form("https://hanime1.me/save", form_data)
+        log.info(f"[watch-later] 响应: {result}")
+        return result
 
     @app.post("/api/video/my-list")
     async def video_my_list(payload: dict):
