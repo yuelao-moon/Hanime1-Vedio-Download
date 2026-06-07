@@ -14,8 +14,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const gopeedPortInput = document.getElementById("gopeedPort");
     const gopeedTokenInput = document.getElementById("gopeedToken");
     const gopeedConnectionsInput = document.getElementById("gopeedConnections");
-    const browserChannelSelect = document.getElementById("browserChannel");
-    const browserVerificationTimeoutSecondsInput = document.getElementById("browserVerificationTimeoutSeconds");
 
     const downloadCenterBtn = document.getElementById("downloadCenterBtn");
     const downloadBadge = document.getElementById("downloadBadge");
@@ -58,6 +56,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const viewLanding = document.getElementById("viewLanding");
     const viewBrowse = document.getElementById("viewBrowse");
     const viewParser = document.getElementById("viewParser");
+    const viewProfile = document.getElementById("viewProfile");
+    const authUserBtn = document.getElementById("authUserBtn");
+    const authAvatar = document.getElementById("authAvatar");
+    const authName = document.getElementById("authName");
+    const authHint = document.getElementById("authHint");
+    const profilePageHeader = document.getElementById("profilePageHeader");
+    const profileSections = document.getElementById("profileSections");
+    const profileSectionDetail = document.getElementById("profileSectionDetail");
+    const profileSectionGrid = document.getElementById("profileSectionGrid");
+    const profileSectionTitle = document.getElementById("profileSectionTitle");
+    const profileBackBtn = document.getElementById("profileBackBtn");
+    const profilePrevPageBtn = document.getElementById("profilePrevPageBtn");
+    const profileNextPageBtn = document.getElementById("profileNextPageBtn");
+    const profilePageIndicator = document.getElementById("profilePageIndicator");
 
     const modeBrowseBtn = document.getElementById("modeBrowseBtn");
     const modeParseBtn = document.getElementById("modeParseBtn");
@@ -67,7 +79,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const emptyState = document.getElementById("emptyState");
     const previewContent = document.getElementById("previewContent");
     const logConsole = document.getElementById("logConsole");
-    const cfModal = document.getElementById("cfModal");
     const searchHeader = document.getElementById("searchHeader");
     const toggleSearchBtn = document.getElementById("toggleSearchBtn");
     const statusPanelWrapper = document.getElementById("statusPanelWrapper");
@@ -92,6 +103,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const startDownloadBtn = document.getElementById("startDownloadBtn");
     const downloadSeriesBtn = document.getElementById("downloadSeriesBtn");
     const copyLinkBtn = document.getElementById("copyLinkBtn");
+    const favoriteVideoBtn = document.getElementById("favoriteVideoBtn");
+    const watchLaterBtn = document.getElementById("watchLaterBtn");
+    const myListBtn = document.getElementById("myListBtn");
+    const subscribeCreatorBtn = document.getElementById("subscribeCreatorBtn");
+    const shortcutBackInput = document.getElementById("shortcutBack");
+    const shortcutForwardInput = document.getElementById("shortcutForward");
 
     // Video Player Elements
     const playerWrapper = document.getElementById("playerWrapper");
@@ -120,13 +137,18 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     let searchOptions = null;
     let currentVideoData = null;
+    let authState = { loggedIn: false, username: "", avatarUrl: "", userId: "" };
+    let shortcutBack = "Alt+ArrowLeft";
+    let shortcutForward = "Alt+ArrowRight";
+    let activeProfileSection = "";
+    let activeProfilePage = 1;
+    let activeProfileTotalPages = 1;
     let currentBrowseVideos = [];
     let currentPlaylistItems = [];
     let currentRelatedVideos = [];
     let downloadSnapshot = { activeTasks: [], queuedTasks: [], historyTasks: [] };
     let downloadEventSource = null;
     let downloadReconnectTimer = null;
-    let cfModalTimer = null;
     const selectedBrowseItems = new Map();
     let currentHomeSections = [];
     let currentHomeHero = null;
@@ -159,6 +181,77 @@ document.addEventListener("DOMContentLoaded", () => {
             '"': '&quot;',
             "'": '&#39;'
         }[char]));
+    }
+
+    async function postJson(url, payload = {}) {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+            throw new Error(await response.text() || "请求失败");
+        }
+        const text = await response.text();
+        return text ? JSON.parse(text) : {};
+    }
+
+    function videoIdFromUrl(url) {
+        try {
+            return new URL(url, window.location.href).searchParams.get("v") || "";
+        } catch (_error) {
+            return "";
+        }
+    }
+
+    function syncAuthHeader() {
+        if (!authUserBtn) return;
+        authUserBtn.classList.toggle("logged-in", !!authState.loggedIn);
+        if (authName) authName.textContent = authState.loggedIn ? (authState.username || "已登录") : "未登录";
+        if (authHint) authHint.textContent = authState.loggedIn ? "主页" : "登录";
+        if (authAvatar) {
+            const avatar = authState.avatarUrl ? imageUrl(authState.avatarUrl) : "";
+            authAvatar.src = avatar;
+            authAvatar.style.visibility = avatar ? "visible" : "hidden";
+        }
+    }
+
+    async function refreshAuthState() {
+        try {
+            const response = await fetch("/api/auth/me");
+            if (response.ok) {
+                authState = await response.json();
+            }
+        } catch (_error) {
+            authState = { loggedIn: false, username: "", avatarUrl: "", userId: "" };
+        }
+        syncAuthHeader();
+        updateVideoAccountActions();
+        return authState;
+    }
+
+    function requireLogin() {
+        if (authState.loggedIn) return true;
+        openLoginModal();
+        return false;
+    }
+
+    function normalizeShortcut(value, fallback) {
+        return String(value || "").trim() || fallback;
+    }
+
+    function shortcutFromEvent(event) {
+        const parts = [];
+        if (event.ctrlKey) parts.push("Ctrl");
+        if (event.altKey) parts.push("Alt");
+        if (event.shiftKey) parts.push("Shift");
+        if (event.metaKey) parts.push("Meta");
+        parts.push(event.key);
+        return parts.join("+");
+    }
+
+    function isEditableTarget(target) {
+        return !!target?.closest?.("input, textarea, select, [contenteditable='true']");
     }
 
     function loadPageCache() {
@@ -217,6 +310,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         enforcePageCacheLimit();
         persistPageCache();
+        postJson("/api/page-cache", { key, data, scrollY: previous?.scrollY || 0 }).catch(() => {});
     }
 
     function getPageCacheEntry(key) {
@@ -226,6 +320,7 @@ document.addEventListener("DOMContentLoaded", () => {
         entry.lastUsed = Date.now();
         pageCache.set(key, entry);
         persistPageCache();
+        postJson("/api/page-cache", { key, data: entry.data, scrollY: entry.scrollY || 0 }).catch(() => {});
         return entry;
     }
 
@@ -291,12 +386,31 @@ document.addEventListener("DOMContentLoaded", () => {
             // Ignore storage failures; in-memory cache has already been cleared.
         }
         updatePageCacheStatus();
+        fetch("/api/settings/clear-page-cache", { method: "POST" }).catch(() => {});
     }
 
     function updatePageCacheStatus(message = "") {
         const pageCacheStatus = document.getElementById("pageCacheStatus");
         if (!pageCacheStatus) return;
         pageCacheStatus.textContent = message || `已缓存 ${pageCache.size}/${pageCacheLimit} 个页面`;
+    }
+
+    async function updateCookieStatus(message = "") {
+        const cookieStatus = document.getElementById("cookieStatus");
+        if (!cookieStatus) return;
+        if (message) {
+            cookieStatus.textContent = message;
+            return;
+        }
+        try {
+            const response = await fetch("/api/cookies/status");
+            const data = await response.json();
+            cookieStatus.textContent = data.hasCfClearance
+                ? `Cookie 可用，已缓存 ${data.cookieCount || 0} 个`
+                : "未检测到可用 Cookie";
+        } catch (_error) {
+            cookieStatus.textContent = "Cookie 状态读取失败";
+        }
     }
 
     function proxyImageUrl(url) {
@@ -767,6 +881,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ${vid.videoCount ? `<div class="grid-item-playlist-badge">${escapeHtml(vid.videoCount)}</div>` : ''}
             </div>
             <div class="grid-title" title="${escapeHtml(vid.title || "")}">${escapeHtml(vid.title || "未命名视频")}</div>
+            <button class="quick-watch-later-btn" type="button">稍后观看</button>
         `;
         const selectButton = card.querySelector(".grid-select-toggle");
         setBrowseSelectionState(card, selectButton, isSelected);
@@ -774,6 +889,14 @@ document.addEventListener("DOMContentLoaded", () => {
         if (isPlaylist) {
             selectButton.style.display = "none";
         }
+        const quickWatchLaterBtn = card.querySelector(".quick-watch-later-btn");
+        if (isPlaylist && quickWatchLaterBtn) {
+            quickWatchLaterBtn.style.display = "none";
+        }
+        quickWatchLaterBtn?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            addCardToWatchLater(vid, quickWatchLaterBtn);
+        });
 
         selectButton.addEventListener("click", (event) => {
             event.stopPropagation();
@@ -837,10 +960,16 @@ document.addEventListener("DOMContentLoaded", () => {
                     ${escapeHtml(vid.creator)}
                 </div>
                 ` : ''}
+                <button class="quick-watch-later-btn" type="button">稍后观看</button>
             </div>
         `;
         
         const selectButton = container.querySelector(".grid-select-toggle");
+        const quickWatchLaterBtn = container.querySelector(".quick-watch-later-btn");
+        quickWatchLaterBtn?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            addCardToWatchLater(vid, quickWatchLaterBtn);
+        });
         
         function setSelectionState(selected) {
             if (selected) {
@@ -1479,24 +1608,6 @@ document.addEventListener("DOMContentLoaded", () => {
         return items;
     }
 
-    function scheduleCfModal() {
-        if (cfModalTimer) {
-            clearTimeout(cfModalTimer);
-        }
-        cfModalTimer = setTimeout(() => {
-            cfModal.classList.remove("hidden");
-            cfModalTimer = null;
-        }, 1200);
-    }
-
-    function hideCfModal() {
-        if (cfModalTimer) {
-            clearTimeout(cfModalTimer);
-            cfModalTimer = null;
-        }
-        cfModal.classList.add("hidden");
-    }
-
     function updateSeriesDownloadButton() {
         const count = buildSeriesDownloadItems().length;
         downloadSeriesBtn.disabled = count <= 1;
@@ -1658,6 +1769,158 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    function updateVideoAccountActions() {
+        if (!currentVideoData) {
+            [favoriteVideoBtn, watchLaterBtn, myListBtn, subscribeCreatorBtn].forEach(btn => {
+                if (btn) btn.disabled = true;
+            });
+            return;
+        }
+        if (favoriteVideoBtn) {
+            favoriteVideoBtn.disabled = false;
+            favoriteVideoBtn.classList.toggle("selected-action", !!currentVideoData.isFav);
+            favoriteVideoBtn.textContent = currentVideoData.isFav ? "已喜欢" : "喜欢";
+        }
+        if (watchLaterBtn) {
+            const isWatchLater = !!currentVideoData.myList?.isWatchLater;
+            watchLaterBtn.disabled = false;
+            watchLaterBtn.classList.toggle("selected-action", isWatchLater);
+            watchLaterBtn.textContent = isWatchLater ? "已稍后观看" : "稍后观看";
+        }
+        if (myListBtn) {
+            myListBtn.disabled = !(currentVideoData.myList?.items || []).length;
+        }
+        if (subscribeCreatorBtn) {
+            const post = currentVideoData.creator?.post;
+            subscribeCreatorBtn.classList.toggle("hidden", !post);
+            subscribeCreatorBtn.disabled = !post;
+            subscribeCreatorBtn.textContent = post?.isSubscribed ? "已关注" : "关注";
+            subscribeCreatorBtn.classList.toggle("selected-action", !!post?.isSubscribed);
+        }
+    }
+
+    async function addCardToWatchLater(vid, button) {
+        if (!requireLogin()) return;
+        button.disabled = true;
+        try {
+            await postJson("/api/video/watch-later", {
+                videoId: videoIdFromUrl(vid.url),
+                pageUrl: vid.url,
+                isChecked: true
+            });
+            button.textContent = "已稍后观看";
+            button.classList.add("selected-action");
+        } catch (error) {
+            alert(`加入稍后观看失败: ${error.message}`);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function recordCurrentWatchHistory() {
+        if (!currentVideoData) return;
+        try {
+            await postJson("/api/watch-history/record", {
+                videoId: currentVideoData.videoId || videoIdFromUrl(urlInput.value),
+                title: currentVideoData.title || mainTitle.textContent || "未命名视频",
+                pageUrl: urlInput.value,
+                thumbnail: currentVideoData.thumbnail || ""
+            });
+        } catch (_error) {
+            // Watching should not be blocked by local history persistence.
+        }
+    }
+
+    function createProfileItemCard(item) {
+        const card = document.createElement("button");
+        card.className = "profile-preview-card";
+        card.type = "button";
+        card.innerHTML = `
+            <img src="${imageUrl(item.thumbnail || item.cover || "")}" data-src-raw="${escapeHtml(item.thumbnail || item.cover || "")}" onerror="fallbackImage(this)" loading="lazy" alt="cover">
+            <div>${escapeHtml(item.title || item.name || "未命名内容")}</div>
+        `;
+        card.addEventListener("click", () => {
+            const target = item.url || item.pageUrl || item.link;
+            if (!target) return;
+            if (target.includes("playlist?list=")) {
+                const listId = new URL(target, window.location.href).searchParams.get("list");
+                if (listId) loadBrowseCategory("playlist:" + listId, 1, true);
+                return;
+            }
+            loadParserUrl(target, true, true);
+        });
+        return card;
+    }
+
+    async function loadProfileSummary(pushState = true) {
+        if (!requireLogin()) return;
+        switchView("viewProfile", false);
+        if (pushState) history.pushState({ view: "viewProfile" }, "", "#profile");
+        profileSectionDetail?.classList.add("hidden");
+        if (profileSections) profileSections.innerHTML = `<div class="empty-playlist">正在载入个人主页...</div>`;
+        try {
+            const response = await fetch("/api/profile/summary");
+            if (!response.ok) throw new Error(await response.text() || "个人主页载入失败");
+            renderProfileSummary(await response.json());
+        } catch (error) {
+            if (profileSections) profileSections.innerHTML = `<div class="empty-playlist">个人主页载入失败: ${escapeHtml(error.message)}</div>`;
+        }
+    }
+
+    function renderProfileSummary(data) {
+        const user = data.user || {};
+        if (profilePageHeader) {
+            profilePageHeader.innerHTML = `
+                <img class="profile-page-avatar" src="${imageUrl(user.avatarUrl || "")}" alt="avatar">
+                <div><h1>${escapeHtml(user.username || "个人主页")}</h1><p>稍后观看、喜欢、播放清单、订阅与观看历史</p></div>
+            `;
+        }
+        if (!profileSections) return;
+        profileSections.innerHTML = "";
+        (data.sections || []).forEach(section => {
+            const row = document.createElement("section");
+            row.className = "profile-section-row";
+            row.innerHTML = `
+                <button class="profile-section-heading" type="button">
+                    <span>${escapeHtml(section.title || section.section)}</span>
+                    <span>查看全部</span>
+                </button>
+                <div class="profile-preview-row"></div>
+            `;
+            row.querySelector(".profile-section-heading").addEventListener("click", () => loadProfileSection(section.section, 1, true));
+            const grid = row.querySelector(".profile-preview-row");
+            (section.items || []).slice(0, 6).forEach(item => grid.appendChild(createProfileItemCard(item)));
+            if (!(section.items || []).length) grid.innerHTML = `<div class="empty-playlist">暂无内容</div>`;
+            profileSections.appendChild(row);
+        });
+    }
+
+    async function loadProfileSection(section, page = 1, pushState = true) {
+        activeProfileSection = section;
+        activeProfilePage = page;
+        switchView("viewProfile", false);
+        if (pushState) history.pushState({ view: "viewProfile", section, page }, "", `#profile-${section}-${page}`);
+        profileSections?.classList.add("hidden");
+        profileSectionDetail?.classList.remove("hidden");
+        if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">正在载入...</div>`;
+        const response = await fetch(`/api/profile/section/${encodeURIComponent(section)}?page=${page}`);
+        if (!response.ok) {
+            if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">${escapeHtml(await response.text() || "载入失败")}</div>`;
+            return;
+        }
+        const data = await response.json();
+        activeProfileTotalPages = Number(data.totalPages || 1);
+        if (profileSectionTitle) profileSectionTitle.textContent = data.title || section;
+        if (profilePageIndicator) profilePageIndicator.textContent = `${page} / ${activeProfileTotalPages}`;
+        if (profilePrevPageBtn) profilePrevPageBtn.disabled = page <= 1;
+        if (profileNextPageBtn) profileNextPageBtn.disabled = page >= activeProfileTotalPages;
+        if (profileSectionGrid) {
+            profileSectionGrid.innerHTML = "";
+            (data.items || []).forEach(item => profileSectionGrid.appendChild(createProfileItemCard(item)));
+            if (!(data.items || []).length) profileSectionGrid.innerHTML = `<div class="empty-playlist">暂无内容</div>`;
+        }
+    }
+
     function setDetailTab(tabName) {
         const activeTab = tabName === "comments" ? "comments" : "related";
         document.querySelectorAll("[data-detail-tab]").forEach((button) => {
@@ -1680,6 +1943,7 @@ document.addEventListener("DOMContentLoaded", () => {
         viewLanding.classList.add("hidden");
         viewBrowse.classList.add("hidden");
         viewParser.classList.add("hidden");
+        if (viewProfile) viewProfile.classList.add("hidden");
 
         document.getElementById(viewId).classList.remove("hidden");
         
@@ -1721,6 +1985,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             } else if (state.view === "viewParser" && state.url) {
                 loadParserUrl(state.url, false, true);
+            } else if (state.view === "viewProfile" && state.section) {
+                loadProfileSection(state.section, state.page || 1, false);
+            } else if (state.view === "viewProfile") {
+                loadProfileSummary(false);
             }
         }
     }
@@ -1964,27 +2232,134 @@ document.addEventListener("DOMContentLoaded", () => {
         openHistoryTask(pageUrl);
     });
 
+    // ---- Login ----
+    const loginBtn = document.getElementById("loginBtn");
+    const loginModal = document.getElementById("loginModal");
+    const closeLoginBtn = document.getElementById("closeLoginBtn");
+    const closeLoginBtn2 = document.getElementById("closeLoginBtn2");
+    const submitLoginBtn = document.getElementById("submitLoginBtn");
+    const logoutBtn = document.getElementById("logoutBtn");
+    const loginForm = document.getElementById("loginForm");
+    const loggedInPanel = document.getElementById("loggedInPanel");
+    const loginError = document.getElementById("loginError");
+    const loginModalTitle = document.getElementById("loginModalTitle");
+
+    let isLoggedIn = false;
+
+    async function refreshLoginStatus() {
+        await refreshAuthState();
+        isLoggedIn = !!authState.loggedIn;
+        loginBtn.title = isLoggedIn ? "已登录（点击查看）" : "登录账号";
+        loginBtn.textContent = isLoggedIn ? "✅" : "👤";
+    }
+
+    function openLoginModal() {
+        loginError.style.display = "none";
+        loginError.textContent = "";
+        if (isLoggedIn) {
+            loginModalTitle.textContent = "✅ 已登录";
+            loginForm.style.display = "none";
+            loggedInPanel.style.display = "block";
+        } else {
+            loginModalTitle.textContent = "👤 登录账号";
+            loginForm.style.display = "block";
+            loggedInPanel.style.display = "none";
+        }
+        loginModal.classList.remove("hidden");
+    }
+
+    loginBtn.addEventListener("click", openLoginModal);
+    authUserBtn?.addEventListener("click", () => {
+        if (authState.loggedIn) {
+            loadProfileSummary(true);
+        } else {
+            openLoginModal();
+        }
+    });
+    closeLoginBtn.addEventListener("click", () => loginModal.classList.add("hidden"));
+    closeLoginBtn2.addEventListener("click", () => loginModal.classList.add("hidden"));
+    loginModal.addEventListener("click", (e) => { if (e.target === loginModal) loginModal.classList.add("hidden"); });
+
+    submitLoginBtn.addEventListener("click", async () => {
+        const email = document.getElementById("loginEmail").value.trim();
+        const password = document.getElementById("loginPassword").value;
+        if (!email || !password) {
+            loginError.textContent = "邮箱和密码不能为空";
+            loginError.style.display = "block";
+            return;
+        }
+        submitLoginBtn.disabled = true;
+        submitLoginBtn.textContent = "登录中…";
+        loginError.style.display = "none";
+        try {
+            const res = await fetch("/api/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, password }),
+            });
+            const text = await res.text();
+            if (res.ok) {
+                await refreshLoginStatus();
+                loginBtn.textContent = "✅";
+                loginBtn.title = "已登录（点击查看）";
+                loginModalTitle.textContent = "✅ 已登录";
+                loginForm.style.display = "none";
+                loggedInPanel.style.display = "block";
+            } else {
+                loginError.textContent = text || "登录失败，请检查账号和密码";
+                loginError.style.display = "block";
+            }
+        } catch (err) {
+            loginError.textContent = "网络错误：" + err.message;
+            loginError.style.display = "block";
+        } finally {
+            submitLoginBtn.disabled = false;
+            submitLoginBtn.textContent = "🔑 登录";
+        }
+    });
+
+    document.getElementById("loginPassword").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") submitLoginBtn.click();
+    });
+
+    logoutBtn.addEventListener("click", async () => {
+        logoutBtn.disabled = true;
+        try {
+            await fetch("/api/logout", { method: "POST" });
+            await fetch("/api/auth/logout", { method: "POST" });
+            authState = { loggedIn: false, username: "", avatarUrl: "", userId: "" };
+            isLoggedIn = false;
+            syncAuthHeader();
+            loginBtn.textContent = "👤";
+            loginBtn.title = "登录账号";
+            loginModal.classList.add("hidden");
+        } finally {
+            logoutBtn.disabled = false;
+        }
+    });
+
+    refreshLoginStatus();
+
+    profileBackBtn?.addEventListener("click", () => {
+        profileSectionDetail?.classList.add("hidden");
+        profileSections?.classList.remove("hidden");
+    });
+    profilePrevPageBtn?.addEventListener("click", () => {
+        if (activeProfileSection && activeProfilePage > 1) {
+            loadProfileSection(activeProfileSection, activeProfilePage - 1, true);
+        }
+    });
+    profileNextPageBtn?.addEventListener("click", () => {
+        if (activeProfileSection && activeProfilePage < activeProfileTotalPages) {
+            loadProfileSection(activeProfileSection, activeProfilePage + 1, true);
+        }
+    });
+
     // ---- Settings API ----
     settingsBtn.addEventListener("click", async () => {
         settingsModal.classList.remove("hidden");
         updatePageCacheStatus();
-
-        // fetch available browsers dynamically
-        try {
-            const browserRes = await fetch("/api/browsers");
-            if (browserRes.ok) {
-                const browserData = await browserRes.json();
-                const choices = browserData.choices || [];
-                if (browserChannelSelect) {
-                    browserChannelSelect.innerHTML = choices.map(choice => {
-                        const label = choice.available ? choice.label : `${choice.label} (未检测到)`;
-                        return `<option value="${escapeHtml(choice.channel)}">${escapeHtml(label)}</option>`;
-                    }).join("");
-                }
-            }
-        } catch (e) {
-            console.error("Failed to load browsers list", e);
-        }
+        updateCookieStatus();
 
         // fetch current settings
         try {
@@ -2009,12 +2384,10 @@ document.addEventListener("DOMContentLoaded", () => {
             if (gopeedConnectionsInput) {
                 gopeedConnectionsInput.value = data.gopeedConnections || 16;
             }
-            if (browserChannelSelect) {
-                browserChannelSelect.value = data.browserChannel || "msedge";
-            }
-            if (browserVerificationTimeoutSecondsInput) {
-                browserVerificationTimeoutSecondsInput.value = data.browserVerificationTimeoutSeconds || 180;
-            }
+            shortcutBack = normalizeShortcut(data.shortcutBack, "Alt+ArrowLeft");
+            shortcutForward = normalizeShortcut(data.shortcutForward, "Alt+ArrowRight");
+            if (shortcutBackInput) shortcutBackInput.value = shortcutBack;
+            if (shortcutForwardInput) shortcutForwardInput.value = shortcutForward;
         } catch (e) {
             console.error("Failed to load settings");
         }
@@ -2024,7 +2397,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const clearCacheBtn = document.getElementById('clearCacheBtn');
     if (clearCacheBtn) {
         clearCacheBtn.addEventListener('click', async () => {
-            if (!confirm('确定要清除浏览器本地缓存吗？这会强行关闭当前正在运行的抓取引擎（如果有的话），并清除所有验证记录。')) return;
+            if (!confirm('确定要清除本地缓存吗？这会清除页面缓存和 HTTP 抓取缓存，下载历史会保留。')) return;
             
             clearCacheBtn.disabled = true;
             clearCacheBtn.innerText = '🧹 正在清理...';
@@ -2032,7 +2405,7 @@ document.addEventListener("DOMContentLoaded", () => {
             try {
                 const res = await fetch('/api/settings/clear-cache', { method: 'POST' });
                 if (res.ok) {
-                    alert('本地缓存清理成功！抓取引擎已重置。');
+                    alert('本地缓存清理成功。');
                 } else {
                     const err = await res.text();
                     alert('清理失败: ' + err);
@@ -2051,6 +2424,26 @@ document.addEventListener("DOMContentLoaded", () => {
         clearPageCacheBtn.addEventListener("click", () => {
             clearPageCache();
             updatePageCacheStatus("页面缓存已清除");
+        });
+    }
+
+    const refreshCookieBtn = document.getElementById("refreshCookieBtn");
+    if (refreshCookieBtn) {
+        refreshCookieBtn.addEventListener("click", async () => {
+            refreshCookieBtn.disabled = true;
+            updateCookieStatus("正在打开浏览器抓取 Cookie...");
+            try {
+                const response = await fetch("/api/cookies/refresh", { method: "POST" });
+                if (!response.ok) {
+                    throw new Error(await response.text() || "Cookie 刷新失败");
+                }
+                const data = await response.json();
+                updateCookieStatus(data.valid ? "Cookie 已刷新并验证通过" : "Cookie 已刷新，但 HTTP 验证仍失败");
+            } catch (error) {
+                updateCookieStatus(`Cookie 刷新失败: ${error.message}`);
+            } finally {
+                refreshCookieBtn.disabled = false;
+            }
         });
     }
 
@@ -2130,12 +2523,8 @@ document.addEventListener("DOMContentLoaded", () => {
             return alert("Gopeed 最大连接数必须在 1 到 128 之间");
         }
 
-        const browserChannel = browserChannelSelect?.value || "msedge";
-
-        const browserVerificationTimeoutSeconds = Number.parseInt(browserVerificationTimeoutSecondsInput?.value || "180", 10);
-        if (!Number.isInteger(browserVerificationTimeoutSeconds) || browserVerificationTimeoutSeconds < 30 || browserVerificationTimeoutSeconds > 600) {
-            return alert("穿透超时时间必须在 30 到 600 秒之间");
-        }
+        const nextShortcutBack = normalizeShortcut(shortcutBackInput?.value, "Alt+ArrowLeft");
+        const nextShortcutForward = normalizeShortcut(shortcutForwardInput?.value, "Alt+ArrowRight");
 
         try {
             const res = await fetch("/api/settings", {
@@ -2149,12 +2538,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     gopeedPort,
                     gopeedToken,
                     gopeedConnections,
-                    browserChannel,
-                    browserVerificationTimeoutSeconds
+                    shortcutBack: nextShortcutBack,
+                    shortcutForward: nextShortcutForward
                 })
             });
             if (res.ok) {
                 applyPageCacheLimit(pageCacheLimitValue);
+                shortcutBack = nextShortcutBack;
+                shortcutForward = nextShortcutForward;
                 alert("全局设置已保存！新的配置将立即生效。");
                 settingsModal.classList.add("hidden");
             } else {
@@ -2170,6 +2561,7 @@ document.addEventListener("DOMContentLoaded", () => {
     playVideoBtn.addEventListener("click", () => {
         if (!currentVideoUrl) return;
         currentVideoFallbackTried = false;
+        recordCurrentWatchHistory();
         
         // Hide Cover, Show Player
         coverWrapper.classList.add("hidden");
@@ -2275,6 +2667,7 @@ document.addEventListener("DOMContentLoaded", () => {
         delete videoPlayer.dataset.src;
         currentPlaylistItems = [];
         currentRelatedVideos = [];
+        updateVideoAccountActions();
         playlistCount.textContent = "0";
         playlistContainer.innerHTML = `<div class="empty-playlist">暂无影片序列</div>`;
         relatedVideoCount.textContent = "0";
@@ -2303,10 +2696,7 @@ document.addEventListener("DOMContentLoaded", () => {
         prepareParserLoading(normalizedUrl);
         window.scrollTo({ top: 0, behavior: "auto" });
 
-        log("初始化探针引力引擎...", "info");
-        log("调用本地代理规避侦测...", "info");
-        
-        scheduleCfModal();
+        log("初始化 HTTP 抓取请求...", "info");
 
         try {
             log(`目标源: ${normalizedUrl}`, "info");
@@ -2316,8 +2706,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ url: normalizedUrl })
             });
-
-            hideCfModal();
 
             if (!response.ok) {
                 const errText = await response.text();
@@ -2332,7 +2720,6 @@ document.addEventListener("DOMContentLoaded", () => {
             window.scrollTo({ top: 0, behavior: "auto" });
 
         } catch (error) {
-            hideCfModal();
             log(`❌ 解析异常中断: ${error.message}`, "error");
         }
     }
@@ -2422,7 +2809,92 @@ document.addEventListener("DOMContentLoaded", () => {
         renderRelatedVideoGrid(data.relatedVideos || []);
         setDetailTab("related");
         loadComments(data.videoId || "");
+        updateVideoAccountActions();
     }
+
+    favoriteVideoBtn?.addEventListener("click", async () => {
+        if (!currentVideoData || !requireLogin()) return;
+        favoriteVideoBtn.disabled = true;
+        try {
+            await postJson("/api/video/favorite", {
+                videoId: currentVideoData.videoId || videoIdFromUrl(urlInput.value),
+                csrfToken: currentVideoData.csrfToken,
+                currentUserId: currentVideoData.currentUserId,
+                isFav: !!currentVideoData.isFav
+            });
+            currentVideoData.isFav = !currentVideoData.isFav;
+            updateVideoAccountActions();
+        } catch (error) {
+            alert(`喜欢操作失败: ${error.message}`);
+        } finally {
+            favoriteVideoBtn.disabled = false;
+        }
+    });
+
+    watchLaterBtn?.addEventListener("click", async () => {
+        if (!currentVideoData || !requireLogin()) return;
+        const checked = !currentVideoData.myList?.isWatchLater;
+        watchLaterBtn.disabled = true;
+        try {
+            await postJson("/api/video/watch-later", {
+                videoId: currentVideoData.videoId || videoIdFromUrl(urlInput.value),
+                pageUrl: urlInput.value,
+                csrfToken: currentVideoData.csrfToken,
+                currentUserId: currentVideoData.currentUserId,
+                listCode: currentVideoData.myList?.watchLaterCode,
+                isChecked: checked
+            });
+            currentVideoData.myList = currentVideoData.myList || {};
+            currentVideoData.myList.isWatchLater = checked;
+            updateVideoAccountActions();
+        } catch (error) {
+            alert(`稍后观看操作失败: ${error.message}`);
+        } finally {
+            watchLaterBtn.disabled = false;
+        }
+    });
+
+    myListBtn?.addEventListener("click", async () => {
+        if (!currentVideoData || !requireLogin()) return;
+        const item = (currentVideoData.myList?.items || []).find(entry => !entry.isSelected) || (currentVideoData.myList?.items || [])[0];
+        if (!item?.code) return alert("未识别到可加入的播放清单");
+        myListBtn.disabled = true;
+        try {
+            await postJson("/api/video/my-list", {
+                videoId: currentVideoData.videoId || videoIdFromUrl(urlInput.value),
+                csrfToken: currentVideoData.csrfToken,
+                currentUserId: currentVideoData.currentUserId,
+                listCode: item.code,
+                isChecked: !item.isSelected
+            });
+            item.isSelected = !item.isSelected;
+        } catch (error) {
+            alert(`加入清单失败: ${error.message}`);
+        } finally {
+            updateVideoAccountActions();
+        }
+    });
+
+    subscribeCreatorBtn?.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        if (!currentVideoData?.creator?.post || !requireLogin()) return;
+        const post = currentVideoData.creator.post;
+        subscribeCreatorBtn.disabled = true;
+        try {
+            await postJson("/api/creator/subscribe", {
+                csrfToken: currentVideoData.csrfToken,
+                userId: post.userId,
+                artistId: post.artistId,
+                isSubscribed: !!post.isSubscribed
+            });
+            post.isSubscribed = !post.isSubscribed;
+            updateVideoAccountActions();
+        } catch (error) {
+            alert(`关注作者失败: ${error.message}`);
+        } finally {
+            subscribeCreatorBtn.disabled = false;
+        }
+    });
 
     startDownloadBtn.addEventListener("click", async () => {
         if (!currentRawVideoUrl && !urlInput.value.trim()) {
@@ -2467,6 +2939,18 @@ document.addEventListener("DOMContentLoaded", () => {
             statusPanelWrapper.classList.toggle("collapsed");
         });
     }
+
+    document.addEventListener("keydown", (event) => {
+        if (isEditableTarget(event.target)) return;
+        const shortcut = shortcutFromEvent(event);
+        if (shortcut === shortcutBack) {
+            event.preventDefault();
+            history.back();
+        } else if (shortcut === shortcutForward) {
+            event.preventDefault();
+            history.forward();
+        }
+    });
 
     if (commentsList) {
         commentsList.addEventListener("click", (event) => {

@@ -108,9 +108,9 @@ http://127.0.0.1:58080/
 
 常见文件：
 
-- `settings.json`：下载目录、Gopeed、浏览器和页面缓存设置
+- `settings.json`：下载目录、Gopeed、快捷键和页面缓存设置
 - `download-history.json`：下载历史
-- `.playwright_data\`：浏览器验证会话数据
+- `cf_cookies.json`：HTTP 请求复用的 Cookie 缓存
 
 这些数据不会打进 exe，便于升级程序时保留设置和历史。
 
@@ -143,11 +143,10 @@ python python_backend\smoke.py
 python_backend/
 ├── app/
 │   ├── main.py          # FastAPI 应用和 API 路由
-│   ├── scraper.py       # HTTP 抓取和 Playwright 验证兜底
+│   ├── scraper.py       # HTTP 抓取、登录 Cookie 和数据接口请求
 │   ├── parser.py        # 页面、评论、回复和视频信息解析
 │   ├── downloads.py     # 下载队列、SSE 和 Gopeed API
 │   ├── settings.py      # 用户设置和本地数据路径
-│   ├── browsers.py      # 本机浏览器检测
 │   └── paths.py         # 源码/打包后的静态资源定位
 ├── desktop.py           # exe 桌面启动入口
 ├── run.py               # 源码服务启动入口
@@ -181,9 +180,9 @@ http://127.0.0.1:58080/
 .\dist\HanimeMediaCenter.exe --port 58081
 ```
 
-### Cloudflare 或人机验证失败
+### HTTP 请求被 Cloudflare 拦截
 
-在设置里切换浏览器通道，例如 Edge、Chrome 或 Chromium。验证浏览器需要本机已安装，并且不要在验证过程中关闭弹出的浏览器窗口。
+刷新可用的 `cf_cookies.json` 后重试。当前抓取流程只走 HTTP 请求，不再启动浏览器验证兜底。
 
 ### 下载任务创建失败
 
@@ -191,7 +190,7 @@ http://127.0.0.1:58080/
 
 ### exe 体积较大
 
-这是单文件打包的正常现象。程序包含 Python 运行时、后端依赖和前端静态资源，但不内置 Edge/Chrome 浏览器本体。
+这是单文件打包的正常现象。程序包含 Python 运行时、后端依赖和前端静态资源。
 
 ## 免责声明
 

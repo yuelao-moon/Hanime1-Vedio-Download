@@ -1,5 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import importlib.util
+
+if importlib.util.find_spec('curl_cffi') is None:
+    raise RuntimeError(
+        'curl_cffi is required for packaged Cloudflare cookie requests. '
+        'Build with python_backend\\.venv\\Scripts\\pyinstaller.exe or install requirements first.'
+    )
+
 
 a = Analysis(
     ['python_backend\\desktop.py'],

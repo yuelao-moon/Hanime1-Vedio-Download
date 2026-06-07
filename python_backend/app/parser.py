@@ -40,7 +40,14 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
         elif imgs:
             creator_name = imgs[-1].attributes.get("alt", "")
 
-    return {
+    csrf_token = attr(tree.css_first("input[name='_token'], input[name=_token]"), "value")
+    current_user_id = attr(tree.css_first("input[name='like-user-id'], input[name=like-user-id]"), "value")
+    like_status = attr(tree.css_first("[name='like-status'], [name=like-status]"), "value")
+    unlike_status = attr(tree.css_first("[name='unlike-status'], [name=unlike-status]"), "value")
+    my_list = extract_my_list(tree)
+    creator_post = extract_creator_post(tree)
+
+    result = {
         "videoUrl": clean_url(video_url),
         "title": normalize_title(extract_title(tree)),
         "thumbnail": extract_thumbnail(tree),
@@ -54,12 +61,74 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
             "id": creator_id
         } if (creator_name or creator_id) else None
     }
+    result.update({
+        "csrfToken": csrf_token,
+        "currentUserId": current_user_id,
+        "isFav": bool(like_status),
+        "isUnlike": bool(unlike_status),
+        "favTimes": int_attr_value(tree.css_first("input[name='likes-count'], input[name=likes-count]")),
+        "unlikesCount": int_attr_value(tree.css_first("input[name='unlikes-count'], input[name=unlikes-count]")),
+        "myList": my_list,
+    })
+    if result["creator"] is not None and creator_post:
+        result["creator"]["post"] = creator_post
+    return result
 
 
 
 def parse_video_grid(html: str) -> list[dict[str, str]]:
     tree = HTMLParser(html or "")
     return extract_cards(tree.css("a[href*='watch?v=']"), BASE_URL)
+
+
+def attr(node: Node | None, name: str) -> str:
+    return node.attributes.get(name, "") if node else ""
+
+
+def int_attr_value(node: Node | None, name: str = "value") -> int:
+    value = attr(node, name)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def extract_my_list(tree: HTMLParser) -> dict:
+    items = []
+    for wrapper in tree.css("div[class~=playlist-checkbox-wrapper]"):
+        input_node = wrapper.css_first("input")
+        title_node = wrapper.css_first("span")
+        code = attr(input_node, "id")
+        title = title_node.text(strip=True) if title_node else ""
+        if not code or not title:
+            continue
+        items.append({
+            "code": code,
+            "title": title,
+            "isSelected": "checked" in (input_node.attributes if input_node else {}),
+        })
+    watch_later_input = tree.css_first("#playlist-save-checkbox input")
+    return {
+        "isWatchLater": "checked" in (watch_later_input.attributes if watch_later_input else {}),
+        "watchLaterCode": attr(watch_later_input, "id") or "WL",
+        "items": items,
+    }
+
+
+def extract_creator_post(tree: HTMLParser) -> dict | None:
+    form = tree.css_first("#video-subscribe-form")
+    if not form:
+        return None
+    user_id = attr(form.css_first("input[name='subscribe-user-id'], input[name=subscribe-user-id]"), "value")
+    artist_id = attr(form.css_first("input[name='subscribe-artist-id'], input[name=subscribe-artist-id]"), "value")
+    status = attr(form.css_first("input[name='subscribe-status'], input[name=subscribe-status]"), "value")
+    if not user_id or not artist_id:
+        return None
+    return {
+        "userId": user_id,
+        "artistId": artist_id,
+        "isSubscribed": status == "1",
+    }
 
 
 def parse_home_hero(tree: HTMLParser) -> dict | None:
@@ -197,6 +266,9 @@ def parse_home_page(html: str) -> dict:
 
 def looks_like_blocked_page(html: str) -> bool:
     lower = (html or "").lower()
+    # _cf_chl_opt is a JS object only present on CF challenge pages — most reliable marker
+    if "_cf_chl_opt" in lower:
+        return True
     return any(
         marker in lower
         for marker in (
@@ -207,8 +279,13 @@ def looks_like_blocked_page(html: str) -> bool:
             "just a moment",
             "checking your browser",
             "verify you are human",
+            # Simplified Chinese
             "正在检查您的浏览器",
             "请验证您是真人",
+            # Traditional Chinese (zh-TW locale)
+            "請稍候",
+            "正在檢查您的瀏覽器",
+            "請驗證您是真人",
         )
     )
 
@@ -229,7 +306,7 @@ def parse_total_pages(html: str, default_page: int) -> int:
 
 
 def build_file_name(title: str | None, download_url: str | None) -> str:
-    safe_title = re.sub(r'[\\/:*?"<>|]', "_", (title or "video").strip()) or "video"
+    safe_title = re.sub(r'[\\/:*?"<>|]', "_", normalize_title(title or "video")) or "video"
     lower_url = (download_url or "").lower()
     extension = ".ts" if ".m3u8" in lower_url else ".mp4"
     path = urlparse(lower_url).path
@@ -413,6 +490,7 @@ def best_image(node: Node) -> str:
 
 def normalize_title(value: str) -> str:
     value = unescape(value or "").replace(" - Hanime1.me", "")
+    value = re.sub(r"\s*\[中文字幕\]\s*$", "", value)
     return re.sub(r"\s+", " ", value).strip()
 
 
