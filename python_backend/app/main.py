@@ -323,13 +323,21 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
             auth = await auth_me()
             user_id = auth.get("userId") or ""
 
-        return await scraper.post_form("https://hanime1.me/save", {
+        result = await scraper.post_form("https://hanime1.me/save", {
             "_token": token,
             "input_id": list_code,
             "video_id": video_id,
             "is_checked": "1" if payload.get("isChecked", True) else "",
             "user_id": user_id,
         })
+
+        # 清除 watchLater 缓存，强制下次获取时重新请求最新数据
+        if user_id:
+            for page in range(1, 10):
+                url = f"https://hanime1.me/user/{user_id}/saves?page={page}"
+                scraper._html_cache.pop((url, "https://hanime1.me/"), None)
+
+        return result
 
     @app.post("/api/video/my-list")
     async def video_my_list(payload: dict):
