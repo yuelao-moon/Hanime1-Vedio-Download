@@ -138,6 +138,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     let searchOptions = null;
     let currentVideoData = null;
+    let currentCommentContext = { csrfToken: "", currentUserId: "", avatarUrl: "", videoId: "" };
     let authState = { loggedIn: false, username: "", avatarUrl: "", userId: "" };
     let shortcutBack = "Alt+ArrowLeft";
     let shortcutForward = "Alt+ArrowRight";
@@ -211,10 +212,41 @@ document.addEventListener("DOMContentLoaded", () => {
             body: JSON.stringify(payload)
         });
         if (!response.ok) {
+            if (response.status === 503) showCookieBlockedBanner();
             throw new Error(await response.text() || "请求失败");
         }
         const text = await response.text();
         return text ? JSON.parse(text) : {};
+    }
+
+    function showCookieBlockedBanner() {
+        const existingBanner = document.getElementById("cookieBlockedBanner");
+        if (existingBanner) return;
+        const banner = document.createElement("div");
+        banner.id = "cookieBlockedBanner";
+        banner.style.cssText = [
+            "position:fixed", "top:0", "left:0", "right:0", "z-index:9999",
+            "background:#c0392b", "color:#fff", "padding:10px 16px",
+            "display:flex", "align-items:center", "gap:12px", "font-size:14px",
+            "box-shadow:0 2px 8px rgba(0,0,0,.4)"
+        ].join(";");
+        const msg = document.createElement("span");
+        msg.style.flex = "1";
+        msg.textContent = "⚠️ HTTP 请求被 Cloudflare 拦截，请刷新 Cookie 后重试";
+        const btn = document.createElement("button");
+        btn.textContent = "刷新 Cookie";
+        btn.style.cssText = "background:#fff;color:#c0392b;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-weight:bold";
+        btn.onclick = () => {
+            banner.remove();
+            settingsBtn.click();
+        };
+        const closeBtn = document.createElement("button");
+        closeBtn.textContent = "✕";
+        closeBtn.style.cssText = "background:transparent;color:#fff;border:none;padding:4px 8px;cursor:pointer;font-size:16px";
+        closeBtn.onclick = () => banner.remove();
+        banner.append(msg, btn, closeBtn);
+        document.body.prepend(banner);
+        setTimeout(() => banner.remove(), 15000);
     }
 
     function videoIdFromUrl(url) {
@@ -277,12 +309,32 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function loadPageCache() {
-        // 禁用页面缓存，每次都重新请求
         return new Map();
     }
 
+    async function restorePageCacheFromBackend() {
+        try {
+            const response = await fetch("/api/page-cache/all");
+            if (!response.ok) return;
+            const entries = await response.json();
+            if (!Array.isArray(entries)) return;
+            for (const entry of entries) {
+                if (entry.key && entry.data && !pageCache.has(entry.key)) {
+                    pageCache.set(entry.key, {
+                        data: entry.data,
+                        scrollY: entry.scrollY || 0,
+                        lastUsed: Date.now(),
+                    });
+                }
+            }
+            enforcePageCacheLimit();
+            updatePageCacheStatus();
+        } catch (_err) {
+            // 缓存恢复失败不影响正常使用
+        }
+    }
+
     function persistPageCache() {
-        // 禁用页面缓存持久化
         updatePageCacheStatus();
     }
 
@@ -1212,6 +1264,7 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const response = await fetch(`/api/search?${buildSearchParams(page).toString()}`);
             if (!response.ok) {
+                if (response.status === 503) showCookieBlockedBanner();
                 throw new Error(await response.text() || "搜索失败");
             }
             const data = await response.json();
@@ -1644,17 +1697,61 @@ document.addEventListener("DOMContentLoaded", () => {
         return `<div class="${className} placeholder">${escapeHtml(userName.slice(0, 1))}</div>`;
     }
 
+    function renderCommentReplyForm(commentId) {
+        return `
+            <form class="comment-reply-create-form hidden" data-reply-form-for="${escapeHtml(commentId)}">
+                <input class="comment-reply-text-input" type="text" name="reply-comment-text" placeholder="新增一则公开评论..." autocomplete="off">
+                <button class="comment-reply-submit-btn" type="submit">送出</button>
+            </form>
+        `;
+    }
+
+    function renderVideoCommentForm() {
+        const avatar = renderCommentAvatar({
+            userName: authState.username || "我",
+            avatarUrl: currentCommentContext.avatarUrl || authState.avatarUrl
+        }, "comment-create-avatar");
+        return `
+            <form class="comment-create-form" id="videoCommentCreateForm">
+                ${avatar}
+                <input class="comment-create-text-input" type="text" name="comment-text" placeholder="新增一则公开评论..." autocomplete="off">
+                <button class="comment-create-submit-btn" type="submit">送出</button>
+            </form>
+        `;
+    }
+
+    function renderCommentLikeActions(comment) {
+        const commentId = escapeHtml(comment.commentId || "");
+        const foreignType = escapeHtml(comment.foreignType || "comment");
+        const foreignId = escapeHtml(comment.foreignId || comment.commentId || "");
+        const likeCount = Number(comment.likeCount || 0);
+        const likeTotal = Number(comment.likeTotal || 0);
+        const isLiked = String(comment.likeStatus || "") === "1";
+        const isUnliked = String(comment.unlikeStatus || "") === "1";
+        const countText = likeCount ? `<span class="comment-like-count">${escapeHtml(likeCount)}</span>` : "";
+        return `
+            <button class="comment-like-action${isLiked ? " active" : ""}" type="button" data-comment-id="${commentId}" data-foreign-type="${foreignType}" data-foreign-id="${foreignId}" data-positive="1" data-like-user-id="${escapeHtml(comment.likeUserId || currentCommentContext.currentUserId || authState.userId || "")}" data-like-status="${escapeHtml(comment.likeStatus || "")}" data-unlike-status="${escapeHtml(comment.unlikeStatus || "")}" data-like-count="${escapeHtml(likeCount)}" data-like-total="${escapeHtml(likeTotal)}" aria-label="点赞">
+                <span class="material-icons-${isLiked ? "sharp" : "outlined"}">thumb_up</span>
+                ${countText}
+            </button>
+            <button class="comment-like-action${isUnliked ? " active" : ""}" type="button" data-comment-id="${commentId}" data-foreign-type="${foreignType}" data-foreign-id="${foreignId}" data-positive="0" data-like-user-id="${escapeHtml(comment.likeUserId || currentCommentContext.currentUserId || authState.userId || "")}" data-like-status="${escapeHtml(comment.likeStatus || "")}" data-unlike-status="${escapeHtml(comment.unlikeStatus || "")}" data-like-count="${escapeHtml(likeCount)}" data-like-total="${escapeHtml(likeTotal)}" aria-label="点踩">
+                <span class="material-icons-${isUnliked ? "sharp" : "outlined"}">thumb_down</span>
+            </button>
+        `;
+    }
+
     function renderComments(comments = []) {
         const list = Array.isArray(comments) ? comments : [];
         if (!commentsList || !commentsCount) return;
         commentsCount.textContent = list.length;
+        const createForm = renderVideoCommentForm();
 
         if (list.length === 0) {
-            commentsList.innerHTML = `<div class="empty-playlist">暂无评论</div>`;
+            commentsList.innerHTML = `${createForm}<div class="empty-playlist">暂无评论</div>`;
             return;
         }
 
-        commentsList.innerHTML = list.map((comment) => {
+        commentsList.innerHTML = createForm + list.map((comment) => {
             const commentId = escapeHtml(comment.commentId || "");
             const avatar = renderCommentAvatar(comment);
             const replyCount = Number(comment.replyCount || 0);
@@ -1669,14 +1766,31 @@ document.addEventListener("DOMContentLoaded", () => {
                         </div>
                         <div class="comment-content">${escapeHtml(comment.content || "")}</div>
                         <div class="comment-actions">
-                            ${comment.likeCount ? `<span>${escapeHtml(comment.likeCount)} 赞</span>` : ""}
+                            ${renderCommentLikeActions(comment)}
+                            ${comment.commentId ? `<button class="comment-reply-toggle-btn" type="button" data-comment-id="${commentId}">回复</button>` : ""}
                             ${canLoadReplies ? `<button class="comment-reply-btn" type="button" data-comment-id="${commentId}">查看回复${replyCount ? ` (${replyCount})` : ""}</button>` : ""}
                         </div>
+                        ${comment.commentId ? renderCommentReplyForm(comment.commentId) : ""}
                         <div class="comment-replies" data-replies-for="${commentId}"></div>
                     </div>
                 </article>
             `;
         }).join("");
+    }
+
+    function applyCommentsPayload(payload) {
+        if (Array.isArray(payload)) {
+            currentCommentContext = { csrfToken: "", currentUserId: "", avatarUrl: "", videoId: currentVideoData?.videoId || "" };
+            renderComments(payload);
+            return;
+        }
+        currentCommentContext = {
+            csrfToken: String(payload?.csrfToken || ""),
+            currentUserId: String(payload?.currentUserId || ""),
+            avatarUrl: String(payload?.avatarUrl || ""),
+            videoId: String(payload?.videoId || currentVideoData?.videoId || "")
+        };
+        renderComments(payload?.comments || []);
     }
 
     function renderReplies(commentId, replies = []) {
@@ -1718,10 +1832,135 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!response.ok) {
                 throw new Error(await response.text() || "评论载入失败");
             }
-            renderComments(await response.json());
+            applyCommentsPayload(await response.json());
         } catch (error) {
             commentsCount.textContent = "0";
             commentsList.innerHTML = `<div class="empty-playlist">评论载入失败: ${escapeHtml(error.message)}</div>`;
+        }
+    }
+
+    function toggleCommentReplyForm(commentId) {
+        if (!commentId || !commentsList) return;
+        const form = commentsList.querySelector(`[data-reply-form-for="${CSS.escape(commentId)}"]`);
+        if (!form) return;
+        const isHidden = form.classList.toggle("hidden");
+        if (!isHidden) {
+            const input = form.querySelector(".comment-reply-text-input");
+            input?.focus();
+        }
+    }
+
+    async function toggleCommentLike(button) {
+        if (!button || !requireLogin()) return;
+        const csrfToken = currentCommentContext.csrfToken || currentVideoData?.csrfToken || "";
+        const foreignType = button.dataset.foreignType || "comment";
+        const foreignId = button.dataset.foreignId || button.dataset.commentId || "";
+        const isPositive = button.dataset.positive || "";
+        const likeStatus = button.dataset.likeStatus || "";
+        const unlikeStatus = button.dataset.unlikeStatus || "";
+        if (!csrfToken || !foreignId || !isPositive) {
+            alert("缺少点赞凭证，请重新载入评论后再操作");
+            return;
+        }
+        button.disabled = true;
+        try {
+            if ((isPositive === "1" && unlikeStatus === "1") || (isPositive === "0" && likeStatus === "1")) {
+                const cancelPositive = likeStatus === "1" ? "1" : "0";
+                await postJson("/api/comments/like", {
+                    csrfToken,
+                    foreignType,
+                    foreignId,
+                    isPositive: cancelPositive,
+                    likeUserId: button.dataset.likeUserId || currentCommentContext.currentUserId || authState.userId || "",
+                    likeStatus,
+                    unlikeStatus,
+                    likeCount: button.dataset.likeCount || "0",
+                    likeTotal: button.dataset.likeTotal || "0"
+                });
+                await loadComments(currentCommentContext.videoId || currentVideoData?.videoId || "");
+                const nextButton = commentsList?.querySelector(`.comment-like-action[data-foreign-id="${CSS.escape(foreignId)}"][data-positive="${CSS.escape(isPositive)}"]`);
+                if (nextButton) {
+                    await toggleCommentLike(nextButton);
+                }
+                return;
+            }
+            const result = await postJson("/api/comments/like", {
+                csrfToken,
+                foreignType,
+                foreignId,
+                isPositive,
+                likeUserId: button.dataset.likeUserId || currentCommentContext.currentUserId || authState.userId || "",
+                likeStatus,
+                unlikeStatus,
+                likeCount: button.dataset.likeCount || "0",
+                likeTotal: button.dataset.likeTotal || "0"
+            });
+            if (result?.csrf_token) currentCommentContext.csrfToken = result.csrf_token;
+            await loadComments(currentCommentContext.videoId || currentVideoData?.videoId || "");
+        } catch (error) {
+            alert(`赞踩失败: ${error.message}`);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function submitCommentReply(commentId, form) {
+        if (!commentId || !form || !requireLogin()) return;
+        const input = form.querySelector(".comment-reply-text-input");
+        const button = form.querySelector(".comment-reply-submit-btn");
+        const text = String(input?.value || "").trim();
+        if (!text) return;
+        const csrfToken = currentCommentContext.csrfToken || currentVideoData?.csrfToken || "";
+        if (!csrfToken) {
+            alert("缺少 CSRF token，请重新解析视频详情后再回复");
+            return;
+        }
+        if (button) button.disabled = true;
+        try {
+            const result = await postJson("/api/replies/create", {
+                commentId,
+                csrfToken,
+                text
+            });
+            if (result?.csrf_token) currentCommentContext.csrfToken = result.csrf_token;
+            if (input) input.value = "";
+            form.classList.add("hidden");
+            await loadReplies(commentId);
+        } catch (error) {
+            alert(`回复失败: ${error.message}`);
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
+    async function submitVideoComment(form) {
+        if (!form || !requireLogin()) return;
+        const input = form.querySelector(".comment-create-text-input");
+        const button = form.querySelector(".comment-create-submit-btn");
+        const text = String(input?.value || "").trim();
+        if (!text) return;
+        const csrfToken = currentCommentContext.csrfToken || "";
+        const videoId = currentCommentContext.videoId || currentVideoData?.videoId || "";
+        const currentUserId = currentCommentContext.currentUserId || authState.userId || "";
+        if (!csrfToken || !videoId || !currentUserId) {
+            alert("缺少评论表单凭证，请重新载入评论后再发布");
+            return;
+        }
+        if (button) button.disabled = true;
+        try {
+            const result = await postJson("/api/comments/create", {
+                videoId,
+                currentUserId,
+                csrfToken,
+                text
+            });
+            if (result?.csrf_token) currentCommentContext.csrfToken = result.csrf_token;
+            if (input) input.value = "";
+            await loadComments(videoId);
+        } catch (error) {
+            alert(`评论失败: ${error.message}`);
+        } finally {
+            if (button) button.disabled = false;
         }
     }
 
@@ -2803,6 +3042,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     refreshLoginStatus();
+    restorePageCacheFromBackend();
 
     // Auto-collapse log panel on startup
     if (statusPanelWrapper) statusPanelWrapper.classList.add("collapsed");
@@ -3040,6 +3280,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Use HLS.js for m3u8, native HTML5 for mp4
         videoPlayer.referrerPolicy = "no-referrer";
+        function showVideoError(msg) {
+            log(`❌ ${msg}，请尝试刷新页面或更换网络`, "error");
+            const existingErr = playerWrapper.querySelector(".video-error-overlay");
+            if (existingErr) existingErr.remove();
+            const overlay = document.createElement("div");
+            overlay.className = "video-error-overlay";
+            overlay.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.75);color:#fff;gap:12px;z-index:10";
+            overlay.innerHTML = `<span style="font-size:2rem">⚠️</span><span>${escapeHtml(msg)}</span>`;
+            playerWrapper.style.position = "relative";
+            playerWrapper.appendChild(overlay);
+        }
+
         if (currentVideoUrl.includes(".m3u8")) {
             if (Hls.isSupported()) {
                 if(hlsInstance) hlsInstance.destroy();
@@ -3052,6 +3304,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 hlsInstance.on(Hls.Events.ERROR, function(_event, data) {
                     if (data && data.fatal) {
                         console.warn("直链 HLS 播放失败", data);
+                        hlsInstance.destroy();
+                        hlsInstance = null;
+                        showVideoError("HLS 流加载失败，链接可能已过期");
                     }
                 });
             } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
@@ -3063,7 +3318,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         } else {
-            videoPlayer.onerror = () => console.warn("直链视频播放失败");
+            videoPlayer.onerror = () => {
+                console.warn("直链视频播放失败");
+                showVideoError("视频播放失败，链接可能已过期或受防盗链保护");
+            };
             videoPlayer.preload = "auto";
             if (videoPlayer.dataset.src !== currentVideoUrl || videoPlayer.error) {
                 videoPlayer.dataset.src = currentVideoUrl;
@@ -3154,6 +3412,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (!response.ok) {
                 const errText = await response.text();
+                if (response.status === 503) showCookieBlockedBanner();
                 throw new Error(errText || "服务器探针断开");
             }
 
@@ -3418,9 +3677,31 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (commentsList) {
         commentsList.addEventListener("click", (event) => {
+            const likeButton = event.target.closest(".comment-like-action[data-foreign-id]");
+            if (likeButton) {
+                toggleCommentLike(likeButton);
+                return;
+            }
+            const toggleButton = event.target.closest(".comment-reply-toggle-btn[data-comment-id]");
+            if (toggleButton) {
+                toggleCommentReplyForm(toggleButton.dataset.commentId);
+                return;
+            }
             const replyButton = event.target.closest(".comment-reply-btn[data-comment-id]");
             if (!replyButton) return;
             loadReplies(replyButton.dataset.commentId, replyButton);
+        });
+        commentsList.addEventListener("submit", (event) => {
+            const commentForm = event.target.closest("#videoCommentCreateForm");
+            if (commentForm) {
+                event.preventDefault();
+                submitVideoComment(commentForm);
+                return;
+            }
+            const form = event.target.closest(".comment-reply-create-form[data-reply-form-for]");
+            if (!form) return;
+            event.preventDefault();
+            submitCommentReply(form.dataset.replyFormFor, form);
         });
     }
 
@@ -3492,6 +3773,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const resp = await fetch(`/api/browse?category=${encodeURIComponent(category)}&page=${page}`);
             if (!resp.ok) {
                 const errText = await resp.text();
+                if (resp.status === 503) showCookieBlockedBanner();
                 throw new Error(errText || "无法获取该分类资源，可能被盾");
             }
 

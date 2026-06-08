@@ -74,6 +74,17 @@ class LocalStore:
             "updatedAt": row["updated_at"],
         }
 
+    def load_all_page_cache(self, max_age_seconds: int = 4 * 3600) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT key, data, scroll_y, updated_at FROM page_cache WHERE updated_at >= unixepoch() - ? ORDER BY updated_at DESC",
+                (max_age_seconds,),
+            ).fetchall()
+        return [
+            {"key": row["key"], "data": json.loads(row["data"]), "scrollY": row["scroll_y"]}
+            for row in rows
+        ]
+
     def clear_page_cache(self) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM page_cache")

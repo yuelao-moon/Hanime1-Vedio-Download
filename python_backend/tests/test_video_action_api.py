@@ -54,11 +54,36 @@ async def test_video_action_routes_post_expected_forms(tmp_path):
             "artistId": "99",
             "isSubscribed": False,
         })
+        reply = await client.post("/api/replies/create", json={
+            "commentId": "406416",
+            "csrfToken": "csrf",
+            "text": "回复内容",
+        })
+        comment = await client.post("/api/comments/create", json={
+            "videoId": "123",
+            "currentUserId": "42",
+            "csrfToken": "comment-csrf",
+            "text": "评论内容",
+        })
+        comment_like = await client.post("/api/comments/like", json={
+            "foreignType": "comment",
+            "foreignId": "406416",
+            "csrfToken": "comment-csrf",
+            "isPositive": "1",
+            "likeUserId": "42",
+            "likeStatus": "0",
+            "likeCount": "13",
+            "likeTotal": "13",
+            "unlikeStatus": "0",
+        })
 
     assert fav.status_code == 200
     assert watch_later.status_code == 200
     assert playlist.status_code == 200
     assert subscribe.status_code == 200
+    assert reply.status_code == 200
+    assert comment.status_code == 200
+    assert comment_like.status_code == 200
     assert scraper.posts[0][0].endswith("/like")
     assert scraper.posts[0][1]["like-status"] == ""
     assert scraper.posts[1][0].endswith("/save")
@@ -68,6 +93,33 @@ async def test_video_action_routes_post_expected_forms(tmp_path):
     assert scraper.posts[2][1]["is_checked"] == "true"
     assert scraper.posts[3][0].endswith("/subscribe")
     assert scraper.posts[3][1]["subscribe-status"] == ""
+    assert scraper.posts[4][0].endswith("/replyComment")
+    assert scraper.posts[4][1] == {
+        "_token": "csrf",
+        "reply-comment-id": "406416",
+        "reply-comment-text": "回复内容",
+    }
+    assert scraper.posts[5][0].endswith("/createComment")
+    assert scraper.posts[5][1] == {
+        "_token": "comment-csrf",
+        "comment-user-id": "42",
+        "comment-type": "video",
+        "comment-foreign-id": "123",
+        "comment-count": "0",
+        "comment-text": "评论内容",
+    }
+    assert scraper.posts[6][0].endswith("/commentLike")
+    assert scraper.posts[6][1] == {
+        "_token": "comment-csrf",
+        "foreign_type": "comment",
+        "foreign_id": "406416",
+        "is_positive": "1",
+        "comment-like-user-id": "42",
+        "like-comment-status": "0",
+        "comment-likes-count": "13",
+        "comment-likes-sum": "13",
+        "unlike-comment-status": "0",
+    }
 
 
 @pytest.mark.asyncio

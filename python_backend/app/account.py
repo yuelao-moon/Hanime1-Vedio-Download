@@ -10,10 +10,15 @@ from selectolax.parser import HTMLParser
 
 from .chrome_cookies import load_cookies, cookies_for_host, load_user_agent
 
+try:
+    from curl_cffi.requests import AsyncSession as CurlSession
+except ImportError:
+    CurlSession = None  # type: ignore[assignment,misc]
+
 
 HANIME_ORIGIN = "https://hanime1.me"
 _HANIME_HOST = "hanime1.me"
-LOGIN_COOKIE_NAMES = ("hanime1_session", "remember_web")
+LOGIN_COOKIE_NAMES = ("hanime1_session", "remember_web", "XSRF-TOKEN")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -130,10 +135,8 @@ class HanimeAccountClient:
         if self.client is not None:
             return await self._login_with_client(email, password)
 
-        try:
-            from curl_cffi.requests import AsyncSession as CurlSession
-        except ImportError as exc:
-            raise ValueError("curl_cffi 未安装，请先安装后再登录") from exc
+        if CurlSession is None:
+            raise ValueError("curl_cffi 未安装，请先安装后再登录")
 
         cf_cookies = self._build_cf_cookies()
         impersonate = self._impersonate()
@@ -197,6 +200,8 @@ class HanimeAccountClient:
     async def me(self) -> dict:
         if not self.session.is_logged_in():
             return {"loggedIn": False, "username": "", "avatarUrl": "", "userId": ""}
+        if CurlSession is None:
+            return {"loggedIn": True, "username": "", "avatarUrl": "", "userId": ""}
 
         cf_cookies = self._build_cf_cookies()
         login_cookies = self.session.load_login_cookies()

@@ -66,3 +66,33 @@ def test_profile_watch_later_and_likes_have_bulk_delete_controls():
     assert "profile-bulk-delete" in app_js
     assert "watchLater" in app_js
     assert "likes" in app_js
+
+
+def test_frontend_comment_reply_create_ui():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
+
+    assert "function renderCommentReplyForm" in app_js
+    assert "function toggleCommentReplyForm" in app_js
+    assert "function submitCommentReply" in app_js
+    assert "function renderVideoCommentForm" in app_js
+    assert "function submitVideoComment" in app_js
+    assert "/api/replies/create" in app_js
+    assert "/api/comments/create" in app_js
+    assert "comment-reply-toggle-btn" in app_js
+    assert "comment-reply-submit-btn" in app_js
+    assert "comment-create-form" in app_js
+    assert "currentCommentContext.csrfToken" in app_js
+    assert "result?.csrf_token" in app_js
+
+
+def test_frontend_comment_like_ui():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
+
+    assert "function renderCommentLikeActions" in app_js
+    assert "function toggleCommentLike" in app_js
+    assert "/api/comments/like" in app_js
+    assert "comment-like-action" in app_js
+    assert "data-positive=\"1\"" in app_js
+    assert "data-positive=\"0\"" in app_js
+    assert "thumb_up" in app_js
+    assert "thumb_down" in app_js

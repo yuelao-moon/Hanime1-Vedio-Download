@@ -111,7 +111,7 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
     ):
         log.info(f"[search] 请求: query={query}, type={type}, genre={genre}, page={page}")
         result = await scraper.search(query=query, type=type, genre=genre, tags=tags, sort=sort, date=date, duration=duration, page=page)
-        log.info(f"[search] 结果: {len(result.get('items', []))} 个视频")
+        log.info(f"[search] 结果: {len(result.get('videos', []))} 个视频")
         return result
 
     @app.get("/api/search/options")
@@ -153,7 +153,12 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
         if not email or not password:
             raise HTTPException(status_code=400, detail="邮箱和密码不能为空")
         if account_client is not None and hasattr(account_client, "login"):
-            return await account_client.login(email, password)
+            result = await account_client.login(email, password)
+            # 登录成功后让 scraper 重新加载 cookie，保持 cookie jar 同步
+            reload = getattr(scraper, "reload_cookie_session", None)
+            if reload:
+                reload()
+            return result
         return await scraper.login(email, password)
 
     @app.get("/api/auth/me")
@@ -170,11 +175,57 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
 
     @app.get("/api/comments")
     async def comments(videoId: str):
-        return await scraper.comments(videoId)
+        if hasattr(scraper, "comments_context"):
+            return await scraper.comments_context(videoId)
+        return {"comments": await scraper.comments(videoId), "csrfToken": "", "currentUserId": "", "avatarUrl": "", "videoId": videoId}
+
+    @app.post("/api/comments/create")
+    async def create_comment(payload: dict):
+        token = require_text(payload, "csrfToken", "缺少 CSRF token")
+        video_id = require_text(payload, "videoId", "缺少视频 ID")
+        user_id = require_text(payload, "currentUserId", "缺少用户 ID")
+        text = require_text(payload, "text", "评论内容不能为空")
+        return await scraper.post_form("https://hanime1.me/createComment", {
+            "_token": token,
+            "comment-user-id": user_id,
+            "comment-type": "video",
+            "comment-foreign-id": video_id,
+            "comment-count": "0",
+            "comment-text": text,
+        })
 
     @app.get("/api/replies")
     async def replies(commentId: str):
         return await scraper.replies(commentId)
+
+    @app.post("/api/replies/create")
+    async def create_reply(payload: dict):
+        token = require_text(payload, "csrfToken", "缺少 CSRF token")
+        comment_id = require_text(payload, "commentId", "缺少评论 ID")
+        text = require_text(payload, "text", "回复内容不能为空")
+        return await scraper.post_form("https://hanime1.me/replyComment", {
+            "_token": token,
+            "reply-comment-id": comment_id,
+            "reply-comment-text": text,
+        })
+
+    @app.post("/api/comments/like")
+    async def like_comment(payload: dict):
+        token = require_text(payload, "csrfToken", "缺少 CSRF token")
+        foreign_type = require_text(payload, "foreignType", "缺少评论类型")
+        foreign_id = require_text(payload, "foreignId", "缺少评论 ID")
+        is_positive = require_text(payload, "isPositive", "缺少赞踩类型")
+        return await scraper.post_form("https://hanime1.me/commentLike", {
+            "_token": token,
+            "foreign_type": foreign_type,
+            "foreign_id": foreign_id,
+            "is_positive": is_positive,
+            "comment-like-user-id": str(payload.get("likeUserId") or ""),
+            "like-comment-status": str(payload.get("likeStatus") or ""),
+            "comment-likes-count": str(payload.get("likeTotal") or "0"),
+            "comment-likes-sum": str(payload.get("likeCount") or "0"),
+            "unlike-comment-status": str(payload.get("unlikeStatus") or ""),
+        })
 
     @app.get("/api/settings")
     async def get_settings():
@@ -259,6 +310,10 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
             }
         except Exception:
             return {"creatorId": "", "avatarUrl": "", "creatorName": name}
+
+    @app.get("/api/page-cache/all")
+    async def get_all_page_cache():
+        return local_store.load_all_page_cache()
 
     @app.get("/api/page-cache")
     async def get_page_cache(key: str):

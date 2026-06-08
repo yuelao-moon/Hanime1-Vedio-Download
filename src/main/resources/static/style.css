@@ -922,16 +922,112 @@ video { width: 100%; height: 100%; display: block; }
     margin-top: 0.7rem;
 }
 
-.comment-reply-btn {
+.comment-like-action,
+.comment-reply-btn,
+.comment-reply-toggle-btn {
     background: none;
     border: none;
-    color: #6bc5ff;
+    color: var(--text-muted);
     cursor: pointer;
+    font: inherit;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0;
+    line-height: 1;
+}
+
+.comment-like-action:hover,
+.comment-like-action.active,
+.comment-reply-btn:hover,
+.comment-reply-toggle-btn:hover {
+    color: var(--text-main);
+}
+
+.comment-like-action .material-icons-outlined,
+.comment-like-action .material-icons-sharp {
+    color: inherit;
+    font-size: 1.2rem;
+    line-height: 1;
+}
+
+.comment-like-count {
+    color: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.comment-like-action:disabled,
+.comment-reply-btn:disabled,
+.comment-reply-toggle-btn:disabled {
+    color: var(--text-muted);
+    cursor: wait;
+    opacity: 0.6;
+}
+
+.comment-reply-create-form {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin-top: 0.8rem;
+}
+
+.comment-create-form {
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.6rem 1rem 1.1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.comment-create-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255,255,255,0.08);
+}
+
+.comment-create-avatar.placeholder {
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-weight: 700;
+}
+
+.comment-reply-text-input,
+.comment-create-text-input {
+    flex: 1;
+    min-width: 0;
+    height: 34px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.22);
+    outline: none;
+    color: var(--text-main);
     font: inherit;
 }
 
-.comment-reply-btn:disabled {
-    color: var(--text-muted);
+.comment-reply-text-input:focus,
+.comment-create-text-input:focus {
+    border-bottom-color: var(--accent);
+}
+
+.comment-reply-submit-btn,
+.comment-create-submit-btn {
+    height: 32px;
+    padding: 0 0.9rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.08);
+    color: var(--text-main);
+    cursor: pointer;
+}
+
+.comment-reply-submit-btn:disabled,
+.comment-create-submit-btn:disabled {
+    opacity: 0.55;
     cursor: wait;
 }
 

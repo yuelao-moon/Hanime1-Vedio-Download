@@ -91,7 +91,7 @@ class HanimeScraper:
             async def _safe_fetch_watching() -> str:
                 try:
                     return await self.fetch_html(watching_url, "https://hanime1.me/")
-                except (Exception, asyncio.CancelledError):
+                except Exception:
                     return ""
 
             html = await _fetch_home_with_fallback()
@@ -207,19 +207,18 @@ class HanimeScraper:
         return {"videos": parse_video_grid(html), "currentPage": page, "totalPages": parse_total_pages(html, page)}
 
     async def _fallback_home_html(self, original_error: Exception) -> str:
-                import os
-                candidates = [
-                    os.path.join("test", "Hanime1.me - H動漫_裏番_線上看.html"),
-                    os.path.join(os.path.dirname(__file__), "..", "..", "test", "Hanime1.me - H動漫_裏番_線上看.html"),
-                    os.path.join(str(self.home), "test", "Hanime1.me - H動漫_裏番_線上看.html"),
-                    os.path.join(str(self.home), "..", "test", "Hanime1.me - H動漫_裏番_線上看.html")
-                ]
-                html = None
-                for path in candidates:
-                    if os.path.exists(path):
-                        with open(path, "r", encoding="utf-8") as f:
-                            return f.read()
-                raise original_error
+        import os
+        candidates = [
+            os.path.join("test", "Hanime1.me - H動漫_裏番_線上看.html"),
+            os.path.join(os.path.dirname(__file__), "..", "..", "test", "Hanime1.me - H動漫_裏番_線上看.html"),
+            os.path.join(str(self.home), "test", "Hanime1.me - H動漫_裏番_線上看.html"),
+            os.path.join(str(self.home), "..", "test", "Hanime1.me - H動漫_裏番_線上看.html"),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read()
+        raise original_error
 
 
     async def search(self, **kwargs) -> dict:
@@ -240,9 +239,14 @@ class HanimeScraper:
         return {"videos": parse_video_grid(html), "currentPage": page, "totalPages": parse_total_pages(html, page)}
 
     async def comments(self, video_id: str) -> list[dict]:
+        data = await self.comments_context(video_id)
+        return data["comments"]
+
+    async def comments_context(self, video_id: str) -> dict:
         url = f"https://hanime1.me/loadComment?id={video_id}&type=video&content=comment-tablink"
         data = await self.fetch_json(url, "https://hanime1.me/")
-        return parse_comments(data.get("comments", ""))
+        html = data.get("comments", "")
+        return parse_comment_context(html, video_id)
 
     async def replies(self, comment_id: str) -> list[dict]:
         data = await self.fetch_json(f"https://hanime1.me/loadReplies?id={comment_id}", "https://hanime1.me/")
@@ -397,7 +401,7 @@ class HanimeScraper:
             merged_headers.update(headers)
         cookies = self._cookies_for_request(url)
         async with CurlSession(impersonate="chrome124", timeout=30) as curl:
-            return await curl.request(
+            response = await curl.request(
                 method,
                 url,
                 headers=merged_headers,
@@ -405,6 +409,8 @@ class HanimeScraper:
                 data=data,
                 allow_redirects=True,
             )
+            self._persist_response_cookies(url, response)
+            return response
 
     def _cookies_for_request(self, url: str) -> dict[str, str]:
         host = urlparse(url).hostname or ""
@@ -421,6 +427,23 @@ class HanimeScraper:
                 if cookie.name and cookie.value:
                     cookies[cookie.name] = cookie.value
         return cookies
+
+    def _persist_response_cookies(self, url: str, response) -> None:
+        host = urlparse(url).hostname or ""
+        if "hanime1.me" not in host:
+            return
+        cookies = getattr(response, "cookies", None)
+        if not cookies:
+            return
+        values = dict(cookies)
+        session_values = {
+            name: value
+            for name, value in values.items()
+            if name == "hanime1_session" or name == "XSRF-TOKEN" or name.startswith("remember_web")
+        }
+        if session_values:
+            self.account_session.save_login_cookies_dict(session_values)
+            self._apply_login_cookies_to_client()
 
     async def login(self, email: str, password: str) -> dict:
         """Log in to hanime1.me using HTTP (curl_cffi) with stored CF clearance cookies."""
@@ -611,6 +634,12 @@ def parse_comments(html: str) -> list[dict]:
         action_scope = find_comment_action_scope(wrapper)
         like_count = int_attr(find_in_comment_scope(wrapper, action_scope, "input[name='comment-likes-sum']"), "value")
         like_total = int_attr(find_in_comment_scope(wrapper, action_scope, "input[name='comment-likes-count']"), "value")
+        like_form = find_in_comment_scope(wrapper, action_scope, ".comment-like-form")
+        like_status = attr_from(like_form, "input[name='like-comment-status']", "value")
+        unlike_status = attr_from(like_form, "input[name='unlike-comment-status']", "value")
+        like_user_id = attr_from(like_form, "input[name='comment-like-user-id']", "value")
+        foreign_type = attr_from(like_form, "input[name='foreign_type']", "value")
+        foreign_id = attr_from(like_form, "input[name='foreign_id']", "value")
         replies_button = find_in_comment_scope(wrapper, action_scope, ".load-replies-btn[data-commentid], .load-replies-btn")
         reply_count = extract_first_int(replies_button.text(strip=True) if replies_button else "")
         comments.append({
@@ -621,16 +650,53 @@ def parse_comments(html: str) -> list[dict]:
             "timeText": time_text,
             "likeCount": like_count,
             "likeTotal": like_total,
+            "likeStatus": like_status,
+            "unlikeStatus": unlike_status,
+            "likeUserId": like_user_id,
+            "foreignType": foreign_type or "comment",
+            "foreignId": foreign_id or report.attributes.get("data-reportable-id", ""),
             "hasReplies": bool(replies_button and reply_count > 0),
             "replyCount": reply_count,
         })
     return comments
 
 
+def parse_comment_context(html: str, video_id: str = "") -> dict:
+    tree = HTMLParser(html or "")
+    form = tree.css_first("#comment-create-form")
+    token = ""
+    user_id = ""
+    avatar_url = ""
+    if form:
+        token_node = form.css_first("input[name='_token'], input[name=_token]")
+        user_node = form.css_first("input[name='comment-user-id'], input[name=comment-user-id]")
+        avatar_node = form.css_first("img")
+        token = token_node.attributes.get("value", "") if token_node else ""
+        user_id = user_node.attributes.get("value", "") if user_node else ""
+        if avatar_node:
+            avatar_url = avatar_node.attributes.get("src") or avatar_node.attributes.get("data-src") or ""
+    return {
+        "comments": parse_comments(html),
+        "csrfToken": token,
+        "currentUserId": user_id,
+        "avatarUrl": avatar_url,
+        "videoId": video_id,
+    }
+
+
 def int_attr(node, attr: str, default: int = 0) -> int:
     if not node:
         return default
     return extract_first_int(node.attributes.get(attr, ""), default)
+
+
+def attr_from(scope, selector: str, attr: str, default: str = "") -> str:
+    if not scope:
+        return default
+    node = scope.css_first(selector)
+    if not node:
+        return default
+    return str(node.attributes.get(attr, default) or default)
 
 
 def extract_first_int(value: str, default: int = 0) -> int:
