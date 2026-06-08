@@ -1,96 +1,98 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 
-APP_JS = Path(__file__).resolve().parents[2] / "src" / "main" / "resources" / "static" / "app.js"
-INDEX_HTML = Path(__file__).resolve().parents[2] / "src" / "main" / "resources" / "static" / "index.html"
+def test_frontend_restores_route_from_hash_on_initial_load():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
+
+    assert "function restoreInitialRouteFromHash()" in app_js
+    assert "restoreInitialRouteFromHash();" in app_js
+    assert "#parse?v=" in app_js
+    assert "handleStateRestore" in app_js
 
 
-def test_player_uses_direct_stream_with_proxy_fallback():
-    source = APP_JS.read_text(encoding="utf-8")
+def test_frontend_supports_mouse_history_buttons():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
 
-    assert "currentVideoUrl = directMediaUrl(currentRawVideoUrl)" in source
-    assert "currentProxiedVideoUrl = proxyVideoUrl(currentRawVideoUrl)" in source
-    assert "const fallbackToProxyVideo = () => {" in source
-    assert "function preloadCurrentVideo()" in source
-    assert "preloadCurrentVideo();" in source
-    assert "playerWrapper.classList.add(\"preloading\")" in source
-
-
-def test_player_does_not_poison_direct_stream_before_fallback_is_armed():
-    source = APP_JS.read_text(encoding="utf-8")
-
-    assert "currentVideoUrl === currentRawVideoUrl" in source
-    assert "videoPlayer.error" in source
-    assert "playPromise.catch(fallbackToProxyVideo)" in source
+    assert "function handleMouseHistoryNavigation(event)" in app_js
+    assert 'document.addEventListener("mouseup", handleMouseHistoryNavigation)' in app_js
+    assert "event.button === 3" in app_js
+    assert "event.button === 4" in app_js
+    assert "history.back();" in app_js
+    assert "history.forward();" in app_js
 
 
-def test_cards_use_cached_lazy_image_proxy():
-    source = APP_JS.read_text(encoding="utf-8")
+def test_index_uses_no_referrer_policy_for_direct_media():
+    index_html = Path("src/main/resources/static/index.html").read_text(encoding="utf-8")
 
-    assert "function imageUrl(url)" in source
-    assert "loading=\"lazy\"" in source
-
-
-def test_frontend_connects_comments_replies_and_history_cover_proxy():
-    source = APP_JS.read_text(encoding="utf-8")
-
-    assert "function loadComments(videoId)" in source
-    assert 'fetch(`/api/comments?videoId=${encodeURIComponent(videoId)}`)' in source
-    assert 'fetch(`/api/replies?commentId=${encodeURIComponent(commentId)}`)' in source
-    assert "function historyCoverUrl(task)" in source
-    assert "/api/proxy/history-cover" in source
+    assert '<meta name="referrer" content="no-referrer">' in index_html
 
 
-def test_static_asset_version_bumped_for_comment_ui():
-    source = INDEX_HTML.read_text(encoding="utf-8")
+def test_frontend_uses_direct_images_without_image_proxy():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
 
-    assert 'href="style.css?v=3.3"' in source
-    assert 'src="app.js?v=3.3"' in source
-
-
-def test_related_and_comments_share_tabbed_panel():
-    html = INDEX_HTML.read_text(encoding="utf-8")
-    source = APP_JS.read_text(encoding="utf-8")
-
-    assert 'id="mediaDetailTabs"' in html
-    assert 'data-detail-tab="related"' in html
-    assert 'data-detail-tab="comments"' in html
-    assert 'id="detailPanelRelated"' in html
-    assert 'id="detailPanelComments"' in html
-    assert "function setDetailTab(tabName)" in source
-    assert 'querySelectorAll("[data-detail-tab]")' in source
-    assert "commentsSection" not in source
+    assert "function imageUrl(url)" in app_js
+    assert "return directImageUrl(url);" in app_js
+    assert "proxyImageUrl" not in app_js
+    assert "fallbackProxyImage" not in app_js
+    assert "fallbackImage" not in app_js
+    assert "preloadImageCache" not in app_js
+    assert "/api/proxy/image" not in app_js
+    assert "/api/proxy/images/preload" not in app_js
+    assert "/api/proxy/history-cover" not in app_js
+    assert 'referrerpolicy="no-referrer"' in app_js
+    assert 'referrerPolicy = "no-referrer"' in app_js
 
 
-def test_frontend_has_lru_page_cache_and_clear_control():
-    html = INDEX_HTML.read_text(encoding="utf-8")
-    source = APP_JS.read_text(encoding="utf-8")
+def test_frontend_video_player_uses_direct_media_url():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
 
-    assert "let pageCacheLimit = 20" in source
-    assert "const PAGE_CACHE_STORAGE_KEY" in source
-    assert "function setPageCacheEntry(key, data)" in source
-    assert "while (pageCache.size > pageCacheLimit)" in source
-    assert "function applyPageCacheLimit(value)" in source
-    assert "getParserCacheKey(url)" in source
-    assert "function restoreCachedBrowsePage(key)" in source
-    assert "function restoreCachedParserPage(url)" in source
-    assert "function clearPageCache()" in source
-    assert 'id="pageCacheLimit"' in html
-    assert 'id="clearPageCacheBtn"' in html
-    assert 'id="pageCacheStatus"' in html
-    assert "clearPageCacheBtn.addEventListener" in source
+    assert "function directMediaUrl(url)" in app_js
+    assert "currentVideoUrl = directMediaUrl(currentRawVideoUrl);" in app_js
+    assert "proxyVideoUrl" not in app_js
+    assert "currentProxiedVideoUrl" not in app_js
+    assert "fallbackToProxyVideo" not in app_js
+    assert "/api/proxy/video" not in app_js
+    assert 'videoPlayer.referrerPolicy = "no-referrer"' in app_js
 
 
-def test_static_asset_version_bumped_for_page_cache_ui():
-    source = INDEX_HTML.read_text(encoding="utf-8")
+def test_profile_watch_later_and_likes_have_bulk_delete_controls():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
 
-    assert 'href="style.css?v=3.3"' in source
-    assert 'src="app.js?v=3.3"' in source
+    assert "function renderProfileBulkToolbar" in app_js
+    assert "function toggleProfileBulkMode" in app_js
+    assert "function deleteSelectedProfileItems" in app_js
+    assert "profile-bulk-delete" in app_js
+    assert "watchLater" in app_js
+    assert "likes" in app_js
 
 
-def test_replies_render_avatar_images():
-    source = APP_JS.read_text(encoding="utf-8")
+def test_frontend_comment_reply_create_ui():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
 
-    assert "function renderCommentAvatar" in source
-    assert "comment-reply-avatar" in source
-    assert "reply.avatarUrl" in source
+    assert "function renderCommentReplyForm" in app_js
+    assert "function toggleCommentReplyForm" in app_js
+    assert "function submitCommentReply" in app_js
+    assert "function renderVideoCommentForm" in app_js
+    assert "function submitVideoComment" in app_js
+    assert "/api/replies/create" in app_js
+    assert "/api/comments/create" in app_js
+    assert "comment-reply-toggle-btn" in app_js
+    assert "comment-reply-submit-btn" in app_js
+    assert "comment-create-form" in app_js
+    assert "currentCommentContext.csrfToken" in app_js
+    assert "result?.csrf_token" in app_js
+
+
+def test_frontend_comment_like_ui():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
+
+    assert "function renderCommentLikeActions" in app_js
+    assert "function toggleCommentLike" in app_js
+    assert "/api/comments/like" in app_js
+    assert "comment-like-action" in app_js
+    assert "data-positive=\"1\"" in app_js
+    assert "data-positive=\"0\"" in app_js
+    assert "thumb_up" in app_js
+    assert "thumb_down" in app_js

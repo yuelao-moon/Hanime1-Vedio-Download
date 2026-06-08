@@ -1,5 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import importlib.util
+from PyInstaller.utils.hooks import collect_submodules
+
+if importlib.util.find_spec('curl_cffi') is None:
+    raise RuntimeError(
+        'curl_cffi is required for packaged Cloudflare cookie requests. '
+        'Build with python_backend\\.venv\\Scripts\\pyinstaller.exe or install requirements first.'
+    )
+
 
 a = Analysis(
     ['python_backend\\desktop.py'],
@@ -12,11 +21,27 @@ a = Analysis(
         'uvicorn.protocols.http.auto',
         'uvicorn.protocols.websockets.auto',
         'uvicorn.lifespan.on',
+        'curl_cffi.requests',
+        *collect_submodules('playwright'),
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'pytest',
+        'pytest_asyncio',
+        'unittest',
+        'doctest',
+        'pdb',
+        'tkinter',
+        'matplotlib',
+        'numpy',
+        'pandas',
+        'scipy',
+        'IPython',
+        'jupyter',
+        'notebook',
+    ],
     noarchive=False,
     optimize=0,
 )

@@ -38,9 +38,11 @@ __pycache__/
 # !.mvn/wrapper/
 
 # Project Specific
-.playwright_data/
 .claude/
 scratch/
 comsol_mphserver_v2.port
 node_modules/
 build/
+docs/
+dist/
+CLAUDE.md

@@ -10,6 +10,14 @@ from selectolax.parser import HTMLParser, Node
 BASE_URL = "https://hanime1.me"
 
 
+def absolute_image_url(value: str, current_url: str = BASE_URL) -> str:
+    value = clean_url(value)
+    if not value or value.startswith(("data:", "blob:", "javascript:")):
+        return value if value.startswith("data:") else ""
+    base = current_url if current_url.startswith("http") else BASE_URL
+    return urljoin(base, value)
+
+
 def extract_video_page(page_url: str, html: str, download_html: str | None = None) -> dict:
     source_html = html or ""
     download_source = download_html or ""
@@ -21,8 +29,10 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
     creator_avatar = ""
     creator_url = ""
     creator_id = ""
-    
-    user_link = tree.css_first('a[href*="/user/"]')
+    creator_post = extract_creator_post(tree)
+    artist_id = (creator_post or {}).get("artistId") or ""
+
+    user_link = find_user_link(tree, artist_id) or tree.css_first('a[href*="/user/"]')
     if user_link:
         creator_url = clean_url(user_link.attributes.get("href", ""))
         if creator_url:
@@ -32,7 +42,7 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
         
         imgs = user_link.css("img")
         if imgs:
-            creator_avatar = imgs[-1].attributes.get("src", "")
+            creator_avatar = first_image_url(imgs[-1], page_url)
             
         name_node = tree.css_first("#video-artist-name")
         if name_node:
@@ -40,10 +50,16 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
         elif imgs:
             creator_name = imgs[-1].attributes.get("alt", "")
 
-    return {
+    csrf_token = attr(tree.css_first("input[name='_token'], input[name=_token]"), "value")
+    current_user_id = attr(tree.css_first("input[name='like-user-id'], input[name=like-user-id]"), "value")
+    like_status = attr(tree.css_first("[name='like-status'], [name=like-status]"), "value")
+    unlike_status = attr(tree.css_first("[name='unlike-status'], [name=unlike-status]"), "value")
+    my_list = extract_my_list(tree)
+
+    result = {
         "videoUrl": clean_url(video_url),
         "title": normalize_title(extract_title(tree)),
-        "thumbnail": extract_thumbnail(tree),
+        "thumbnail": extract_thumbnail(tree, page_url),
         "videoId": extract_video_id(page_url),
         "playlist": extract_cards(tree.css("#video-playlist-wrapper a[href*='watch?v=']"), page_url),
         "relatedVideos": extract_related_videos(tree, page_url),
@@ -54,12 +70,91 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
             "id": creator_id
         } if (creator_name or creator_id) else None
     }
+    result.update({
+        "csrfToken": csrf_token,
+        "currentUserId": current_user_id,
+        "isFav": bool(like_status),
+        "isUnlike": bool(unlike_status),
+        "favTimes": int_attr_value(tree.css_first("input[name='likes-count'], input[name=likes-count]")),
+        "unlikesCount": int_attr_value(tree.css_first("input[name='unlikes-count'], input[name=unlikes-count]")),
+        "myList": my_list,
+    })
+    if result["creator"] is not None and creator_post:
+        result["creator"]["post"] = creator_post
+    return result
 
 
 
 def parse_video_grid(html: str) -> list[dict[str, str]]:
     tree = HTMLParser(html or "")
     return extract_cards(tree.css("a[href*='watch?v=']"), BASE_URL)
+
+
+def attr(node: Node | None, name: str) -> str:
+    return node.attributes.get(name, "") if node else ""
+
+
+def int_attr_value(node: Node | None, name: str = "value") -> int:
+    value = attr(node, name)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def extract_my_list(tree: HTMLParser) -> dict:
+    items = []
+    for wrapper in tree.css("div[class~=playlist-checkbox-wrapper]"):
+        input_node = wrapper.css_first("input")
+        title_node = wrapper.css_first("span")
+        code = attr(input_node, "id")
+        title = title_node.text(strip=True) if title_node else ""
+        if not code or not title:
+            continue
+        items.append({
+            "code": code,
+            "title": title,
+            "isSelected": "checked" in (input_node.attributes if input_node else {}),
+        })
+    watch_later_input = tree.css_first("#playlist-save-checkbox input")
+    return {
+        "isWatchLater": "checked" in (watch_later_input.attributes if watch_later_input else {}),
+        "watchLaterCode": attr(watch_later_input, "id") or "WL",
+        "items": items,
+    }
+
+
+def extract_creator_post(tree: HTMLParser) -> dict | None:
+    form = tree.css_first("#video-subscribe-form")
+    if not form:
+        return None
+    user_id = attr(form.css_first("input[name='subscribe-user-id'], input[name=subscribe-user-id]"), "value")
+    artist_id = attr(form.css_first("input[name='subscribe-artist-id'], input[name=subscribe-artist-id]"), "value")
+    status = attr(form.css_first("input[name='subscribe-status'], input[name=subscribe-status]"), "value")
+    if not user_id or not artist_id:
+        return None
+    return {
+        "userId": user_id,
+        "artistId": artist_id,
+        "isSubscribed": status == "1",
+    }
+
+
+def find_user_link(tree: HTMLParser, user_id: str):
+    if not user_id:
+        return None
+    for link in tree.css('a[href*="/user/"]'):
+        href = link.attributes.get("href", "")
+        match = re.search(r"/user/(\d+)", href)
+        if match and match.group(1) == str(user_id):
+            return link
+    return None
+
+
+def first_image_url(node: Node | None, current_url: str = BASE_URL) -> str:
+    if not node:
+        return ""
+    return absolute_image_url(node.attributes.get("data-src") or node.attributes.get("src") or "", current_url)
 
 
 def parse_home_hero(tree: HTMLParser) -> dict | None:
@@ -94,18 +189,18 @@ def parse_home_hero(tree: HTMLParser) -> dict | None:
     thumbnail = ""
     desktop_bg_node = tree.css_first("div[style*='aspect-ratio: 21'] img")
     if desktop_bg_node:
-        thumbnail = desktop_bg_node.attributes.get("src", "")
+        thumbnail = first_image_url(desktop_bg_node)
         
     if not thumbnail:
         mobile_bg_node = tree.css_first(".hidden-md.hidden-lg img[src*='files/']")
         if mobile_bg_node:
-            thumbnail = mobile_bg_node.attributes.get("src", "")
+            thumbnail = first_image_url(mobile_bg_node)
             
     if not thumbnail:
         for img in tree.css("img"):
             src = img.attributes.get("src", "")
             if re.search(r'\d+h?\.(?:jpg|png|webp|jpeg)', src) and "user_default" not in src and "playlist" not in src:
-                thumbnail = src
+                thumbnail = absolute_image_url(src)
                 break
 
     video_id = ""
@@ -197,6 +292,9 @@ def parse_home_page(html: str) -> dict:
 
 def looks_like_blocked_page(html: str) -> bool:
     lower = (html or "").lower()
+    # _cf_chl_opt is a JS object only present on CF challenge pages — most reliable marker
+    if "_cf_chl_opt" in lower:
+        return True
     return any(
         marker in lower
         for marker in (
@@ -207,8 +305,13 @@ def looks_like_blocked_page(html: str) -> bool:
             "just a moment",
             "checking your browser",
             "verify you are human",
+            # Simplified Chinese
             "正在检查您的浏览器",
             "请验证您是真人",
+            # Traditional Chinese (zh-TW locale)
+            "請稍候",
+            "正在檢查您的瀏覽器",
+            "請驗證您是真人",
         )
     )
 
@@ -229,7 +332,7 @@ def parse_total_pages(html: str, default_page: int) -> int:
 
 
 def build_file_name(title: str | None, download_url: str | None) -> str:
-    safe_title = re.sub(r'[\\/:*?"<>|]', "_", (title or "video").strip()) or "video"
+    safe_title = re.sub(r'[\\/:*?"<>|]', "_", normalize_title(title or "video")) or "video"
     lower_url = (download_url or "").lower()
     extension = ".ts" if ".m3u8" in lower_url else ".mp4"
     path = urlparse(lower_url).path
@@ -287,7 +390,7 @@ def extract_title(tree: HTMLParser) -> str:
     return title.text(strip=True) if title else ""
 
 
-def extract_thumbnail(tree: HTMLParser) -> str:
+def extract_thumbnail(tree: HTMLParser, current_url: str = BASE_URL) -> str:
     for selector, attr in (
         ("meta[itemprop='thumbnailUrl']", "content"),
         ("meta[property='og:image']", "content"),
@@ -295,7 +398,7 @@ def extract_thumbnail(tree: HTMLParser) -> str:
     ):
         node = tree.css_first(selector)
         if node and node.attributes.get(attr):
-            return node.attributes[attr]
+            return absolute_image_url(node.attributes[attr], current_url)
     return ""
 
 
@@ -323,7 +426,7 @@ def extract_cards(nodes: list[Node], current_url: str) -> list[dict[str, str]]:
         if not url or url in seen:
             continue
         title = extract_card_title(node)
-        image = best_image(node)
+        image = best_image(node, current_url)
         if not title or not image:
             continue
             
@@ -360,9 +463,18 @@ def extract_cards(nodes: list[Node], current_url: str) -> list[dict[str, str]]:
                 # Normalize spaces
                 creator = re.sub(r"\s+", " ", creator).strip()
             
+        # Extract videoId from URL (e.g., https://hanime1.me/watch?v=405748)
+        video_id = ""
+        if "watch?v=" in url:
+            try:
+                video_id = url.split("watch?v=")[-1].split("&")[0].strip()
+            except Exception:
+                pass
+
         items.append({
-            "url": url, 
-            "thumbnail": image, 
+            "url": url,
+            "videoId": video_id,
+            "thumbnail": image,
             "title": normalize_title(title),
             "duration": duration,
             "likes": likes,
@@ -394,11 +506,11 @@ def extract_card_title(node: Node) -> str:
     return node.attributes.get("title", "")
 
 
-def best_image(node: Node) -> str:
+def best_image(node: Node, current_url: str = BASE_URL) -> str:
     for image in node.css("img[data-src], img[src]"):
         value = image.attributes.get("data-src") or image.attributes.get("src") or ""
         if value and "card_doujin_background" not in value.lower():
-            return value
+            return absolute_image_url(value, current_url)
     curr = node.parent
     for _ in range(3):
         if not curr:
@@ -406,13 +518,14 @@ def best_image(node: Node) -> str:
         for image in curr.css("img[data-src], img[src]"):
             value = image.attributes.get("data-src") or image.attributes.get("src") or ""
             if value and "card_doujin_background" not in value.lower():
-                return value
+                return absolute_image_url(value, current_url)
         curr = curr.parent
     return ""
 
 
 def normalize_title(value: str) -> str:
     value = unescape(value or "").replace(" - Hanime1.me", "")
+    value = re.sub(r"\s*\[中文字幕\]\s*$", "", value)
     return re.sub(r"\s+", " ", value).strip()
 
 
@@ -429,6 +542,156 @@ def absolutize_watch_url(href: str, current_url: str) -> str | None:
     if not href or "watch?v=" not in href:
         return None
     return urljoin(current_url if current_url.startswith("http") else BASE_URL, href)
+
+
+def parse_subscription_creators(html: str, exclude_user_id: str = "") -> list[dict]:
+    """Extract subscribed creator list from the subscriptions page."""
+    tree = HTMLParser(html or "")
+
+    # Build a page-wide map: user_id -> (avatar_url, link_text)
+    user_link_map: dict[str, tuple[str, str]] = {}
+    for a in tree.css("a[href*='/user/']"):
+        href = a.attributes.get("href", "")
+        m = re.search(r"/user/(\d+)", href)
+        if not m:
+            continue
+        uid = m.group(1)
+        if uid in user_link_map:
+            continue
+        img = a.css_first("img")
+        avatar = ""
+        if img:
+            avatar = first_image_url(img)
+        user_link_map[uid] = (avatar, a.text(strip=True))
+
+    creators: list[dict] = []
+    seen: set[str] = set()
+
+    for subtitle in tree.css("div.subtitle"):
+        a = subtitle.css_first("a[href*='search?query=']")
+        if not a:
+            continue
+
+        href = a.attributes.get("href", "") or ""
+        qs = parse_qs(urlparse(href).query)
+        query_vals = qs.get("query", [])
+        if not query_vals:
+            continue
+        search_query = query_vals[0].strip()
+        if not search_query or search_query in seen:
+            continue
+
+        raw_text = a.text(strip=True)
+        name = re.sub(r"\s*[•·]\s*.+$", "", raw_text).strip() or search_query
+        name_lower = name.lower()
+
+        # Method 1: user link in parent containers (up to 5 levels)
+        user_id = ""
+        avatar_url = ""
+        container = subtitle.parent
+        for _ in range(5):
+            if container is None:
+                break
+            user_link = container.css_first("a[href*='/user/']")
+            if user_link:
+                user_href = user_link.attributes.get("href", "")
+                m2 = re.search(r"/user/(\d+)", user_href)
+                if m2:
+                    user_id = m2.group(1)
+                img = user_link.css_first("img")
+                if img:
+                    avatar_url = first_image_url(img)
+                break
+            container = container.parent
+
+        # Method 2: match by creator name across all user links on page
+        if not user_id:
+            for uid, (av, text) in user_link_map.items():
+                text_lower = text.lower()
+                if text_lower and (name_lower in text_lower or text_lower in name_lower):
+                    user_id = uid
+                    avatar_url = av
+                    break
+
+        seen.add(search_query)
+        creators.append({
+            "name": name,
+            "searchQuery": search_query,
+            "userId": user_id,
+            "avatarUrl": avatar_url,
+            "isCreator": True,
+        })
+
+    return creators
+
+
+def parse_query_creator_info(html: str) -> dict:
+    """Extract creator info from a search-by-name results page.
+
+    Looks for a[href*='/user/'] links that are co-located within the same
+    video-card container as a[href*='watch?v='] video links. This avoids
+    picking up the logged-in user's navigation avatar which is outside the grid.
+    """
+    tree = HTMLParser(html or "")
+    uid_info: dict[str, dict] = {}  # uid -> {avatar, name}
+
+    for video_link in tree.css("a[href*='watch?v=']"):
+        container = video_link.parent
+        user_link = None
+        for _ in range(6):
+            if container is None:
+                break
+            user_link = container.css_first("a[href*='/user/']")
+            if user_link:
+                break
+            container = container.parent
+
+        if not user_link:
+            continue
+        href = user_link.attributes.get("href", "")
+        m = re.search(r"/user/(\d+)", href)
+        if not m:
+            continue
+        uid = m.group(1)
+        if uid in uid_info:
+            continue
+        img = user_link.css_first("img")
+        avatar = ""
+        name = ""
+        if img:
+            avatar = first_image_url(img)
+            name = img.attributes.get("alt", "").strip()
+        if not name:
+            name = user_link.text(strip=True)
+        uid_info[uid] = {"avatar": avatar, "name": name}
+
+    if not uid_info:
+        return {}
+
+    uid, info = next(iter(uid_info.items()))
+    return {
+        "creatorId": uid,
+        "creatorAvatar": info.get("avatar", ""),
+        "creatorName": info.get("name", ""),
+    }
+
+
+def parse_creator_avatar_from_profile(html: str) -> str:
+    """Extract creator avatar URL from their profile page."""
+    tree = HTMLParser(html or "")
+    for selector in (
+        ".profile-avatar-wrapper img",
+        ".user-avatar img",
+        "img.avatar",
+        ".profile-avatar img",
+    ):
+        node = tree.css_first(selector)
+        if node:
+            src = node.attributes.get("src") or node.attributes.get("data-src") or ""
+            src = absolute_image_url(src)
+            if src:
+                return src
+    return ""
 
 
 def parse_playlist_grid(html: str) -> list[dict[str, str]]:
@@ -455,7 +718,7 @@ def parse_playlist_grid(html: str) -> list[dict[str, str]]:
         img_node = node.css_first("img")
         thumbnail = ""
         if img_node:
-            thumbnail = img_node.attributes.get("src") or img_node.attributes.get("data-src") or ""
+            thumbnail = first_image_url(img_node)
             
         # Video count / stat
         stat_node = node.css_first(".stats-container .stat-item, .stat-item")

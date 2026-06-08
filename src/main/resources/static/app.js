@@ -14,8 +14,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const gopeedPortInput = document.getElementById("gopeedPort");
     const gopeedTokenInput = document.getElementById("gopeedToken");
     const gopeedConnectionsInput = document.getElementById("gopeedConnections");
-    const browserChannelSelect = document.getElementById("browserChannel");
-    const browserVerificationTimeoutSecondsInput = document.getElementById("browserVerificationTimeoutSeconds");
+    const maxLocalCacheSizeGBInput = document.getElementById("maxLocalCacheSizeGB");
 
     const downloadCenterBtn = document.getElementById("downloadCenterBtn");
     const downloadBadge = document.getElementById("downloadBadge");
@@ -58,6 +57,22 @@ document.addEventListener("DOMContentLoaded", () => {
     const viewLanding = document.getElementById("viewLanding");
     const viewBrowse = document.getElementById("viewBrowse");
     const viewParser = document.getElementById("viewParser");
+    const viewProfile = document.getElementById("viewProfile");
+    const authUserBtn = document.getElementById("authUserBtn");
+    const authAvatar = document.getElementById("authAvatar");
+    const authName = document.getElementById("authName");
+    const authHint = document.getElementById("authHint");
+    const profilePageHeader = document.getElementById("profilePageHeader");
+    const profileSections = document.getElementById("profileSections");
+    const profileSectionDetail = document.getElementById("profileSectionDetail");
+    const profileSectionGrid = document.getElementById("profileSectionGrid");
+    const profileSectionTitle = document.getElementById("profileSectionTitle");
+    const profileBackBtn = document.getElementById("profileBackBtn");
+    const profilePrevPageBtn = document.getElementById("profilePrevPageBtn");
+    const profileNextPageBtn = document.getElementById("profileNextPageBtn");
+    const profilePageIndicator = document.getElementById("profilePageIndicator");
+    const subscriptionCreatorStrip = document.getElementById("subscriptionCreatorStrip");
+    const profilePaginationBar = document.getElementById("profilePaginationBar");
 
     const modeBrowseBtn = document.getElementById("modeBrowseBtn");
     const modeParseBtn = document.getElementById("modeParseBtn");
@@ -67,7 +82,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const emptyState = document.getElementById("emptyState");
     const previewContent = document.getElementById("previewContent");
     const logConsole = document.getElementById("logConsole");
-    const cfModal = document.getElementById("cfModal");
     const searchHeader = document.getElementById("searchHeader");
     const toggleSearchBtn = document.getElementById("toggleSearchBtn");
     const statusPanelWrapper = document.getElementById("statusPanelWrapper");
@@ -92,6 +106,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const startDownloadBtn = document.getElementById("startDownloadBtn");
     const downloadSeriesBtn = document.getElementById("downloadSeriesBtn");
     const copyLinkBtn = document.getElementById("copyLinkBtn");
+    const favoriteVideoBtn = document.getElementById("favoriteVideoBtn");
+    const watchLaterBtn = document.getElementById("watchLaterBtn");
+    const myListBtn = document.getElementById("myListBtn");
+    const subscribeCreatorBtn = document.getElementById("subscribeCreatorBtn");
+    const shortcutBackInput = document.getElementById("shortcutBack");
+    const shortcutForwardInput = document.getElementById("shortcutForward");
 
     // Video Player Elements
     const playerWrapper = document.getElementById("playerWrapper");
@@ -102,8 +122,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentVideoUrl = "";
     let currentRawVideoUrl = "";
-    let currentProxiedVideoUrl = "";
-    let currentVideoFallbackTried = false;
     let hlsInstance = null; // hls.js instance
     let currentView = 'viewLanding';
     let currentCategory = '首页';
@@ -120,19 +138,45 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     let searchOptions = null;
     let currentVideoData = null;
+    let currentCommentContext = { csrfToken: "", currentUserId: "", avatarUrl: "", videoId: "" };
+    let authState = { loggedIn: false, username: "", avatarUrl: "", userId: "" };
+    let shortcutBack = "Alt+ArrowLeft";
+    let shortcutForward = "Alt+ArrowRight";
+    let activeProfileSection = "";
+    let activeProfilePage = 1;
+    let activeProfileTotalPages = 1;
+    let profileBulkMode = false;
+    let currentProfileSectionItems = [];
+    const profileSelectedItems = new Map();
     let currentBrowseVideos = [];
     let currentPlaylistItems = [];
     let currentRelatedVideos = [];
     let downloadSnapshot = { activeTasks: [], queuedTasks: [], historyTasks: [] };
     let downloadEventSource = null;
     let downloadReconnectTimer = null;
-    let cfModalTimer = null;
     const selectedBrowseItems = new Map();
+    const watchLaterCardState = new Map(); // vid.url -> boolean, tracks card-level watch-later toggles
     let currentHomeSections = [];
     let currentHomeHero = null;
     let currentCreatorData = null; // Cache last successful creator page data
     let pageCacheLimit = 20;
     const PAGE_CACHE_STORAGE_KEY = "hanimeMediaCenter.pageCache.v1";
+    const LS_SUB_CREATORS_KEY = "hmc_sub_creators_v1";
+    const LS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+    const PAGE_CACHE_MAX_AGE = 4 * 60 * 60 * 1000; // 4 hours — page cache TTL for localStorage
+
+    function lsGet(key) {
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) return null;
+            const obj = JSON.parse(raw);
+            if (Date.now() - (obj.ts || 0) > LS_CACHE_TTL) return null;
+            return obj.data;
+        } catch { return null; }
+    }
+    function lsSet(key, data) {
+        try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch {}
+    }
     let pageCache = loadPageCache();
     if ("scrollRestoration" in history) {
         history.scrollRestoration = "manual";
@@ -161,23 +205,136 @@ document.addEventListener("DOMContentLoaded", () => {
         }[char]));
     }
 
-    function loadPageCache() {
+    async function postJson(url, payload = {}) {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+            if (response.status === 503) showCookieBlockedBanner();
+            throw new Error(await response.text() || "请求失败");
+        }
+        const text = await response.text();
+        return text ? JSON.parse(text) : {};
+    }
+
+    function showCookieBlockedBanner() {
+        const existingBanner = document.getElementById("cookieBlockedBanner");
+        if (existingBanner) return;
+        const banner = document.createElement("div");
+        banner.id = "cookieBlockedBanner";
+        banner.style.cssText = [
+            "position:fixed", "top:0", "left:0", "right:0", "z-index:9999",
+            "background:#c0392b", "color:#fff", "padding:10px 16px",
+            "display:flex", "align-items:center", "gap:12px", "font-size:14px",
+            "box-shadow:0 2px 8px rgba(0,0,0,.4)"
+        ].join(";");
+        const msg = document.createElement("span");
+        msg.style.flex = "1";
+        msg.textContent = "⚠️ HTTP 请求被 Cloudflare 拦截，请刷新 Cookie 后重试";
+        const btn = document.createElement("button");
+        btn.textContent = "刷新 Cookie";
+        btn.style.cssText = "background:#fff;color:#c0392b;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-weight:bold";
+        btn.onclick = () => {
+            banner.remove();
+            settingsBtn.click();
+        };
+        const closeBtn = document.createElement("button");
+        closeBtn.textContent = "✕";
+        closeBtn.style.cssText = "background:transparent;color:#fff;border:none;padding:4px 8px;cursor:pointer;font-size:16px";
+        closeBtn.onclick = () => banner.remove();
+        banner.append(msg, btn, closeBtn);
+        document.body.prepend(banner);
+        setTimeout(() => banner.remove(), 15000);
+    }
+
+    function videoIdFromUrl(url) {
         try {
-            const raw = window.sessionStorage?.getItem(PAGE_CACHE_STORAGE_KEY);
-            const entries = raw ? JSON.parse(raw) : [];
-            if (!Array.isArray(entries)) return new Map();
-            return new Map(entries.filter(entry => Array.isArray(entry) && entry.length === 2));
+            return new URL(url, window.location.href).searchParams.get("v") || "";
         } catch (_error) {
-            return new Map();
+            return "";
+        }
+    }
+
+    function syncAuthHeader() {
+        if (!authUserBtn) return;
+        authUserBtn.classList.toggle("logged-in", !!authState.loggedIn);
+        if (authName) authName.textContent = authState.loggedIn ? (authState.username || "已登录") : "未登录";
+        if (authHint) authHint.textContent = authState.loggedIn ? "主页" : "登录";
+        if (authAvatar) {
+            const avatar = authState.avatarUrl ? imageUrl(authState.avatarUrl) : "";
+            authAvatar.referrerPolicy = "no-referrer";
+            authAvatar.src = avatar;
+            authAvatar.style.visibility = avatar ? "visible" : "hidden";
+        }
+    }
+
+    async function refreshAuthState() {
+        try {
+            const response = await fetch("/api/auth/me");
+            if (response.ok) {
+                authState = await response.json();
+            }
+        } catch (_error) {
+            authState = { loggedIn: false, username: "", avatarUrl: "", userId: "" };
+        }
+        syncAuthHeader();
+        updateVideoAccountActions();
+        return authState;
+    }
+
+    function requireLogin() {
+        if (authState.loggedIn) return true;
+        openLoginModal();
+        return false;
+    }
+
+    function normalizeShortcut(value, fallback) {
+        return String(value || "").trim() || fallback;
+    }
+
+    function shortcutFromEvent(event) {
+        const parts = [];
+        if (event.ctrlKey) parts.push("Ctrl");
+        if (event.altKey) parts.push("Alt");
+        if (event.shiftKey) parts.push("Shift");
+        if (event.metaKey) parts.push("Meta");
+        parts.push(event.key);
+        return parts.join("+");
+    }
+
+    function isEditableTarget(target) {
+        return !!target?.closest?.("input, textarea, select, [contenteditable='true']");
+    }
+
+    function loadPageCache() {
+        return new Map();
+    }
+
+    async function restorePageCacheFromBackend() {
+        try {
+            const response = await fetch("/api/page-cache/all");
+            if (!response.ok) return;
+            const entries = await response.json();
+            if (!Array.isArray(entries)) return;
+            for (const entry of entries) {
+                if (entry.key && entry.data && !pageCache.has(entry.key)) {
+                    pageCache.set(entry.key, {
+                        data: entry.data,
+                        scrollY: entry.scrollY || 0,
+                        lastUsed: Date.now(),
+                    });
+                }
+            }
+            enforcePageCacheLimit();
+            updatePageCacheStatus();
+        } catch (_err) {
+            // 缓存恢复失败不影响正常使用
         }
     }
 
     function persistPageCache() {
-        try {
-            window.sessionStorage?.setItem(PAGE_CACHE_STORAGE_KEY, JSON.stringify(Array.from(pageCache.entries())));
-        } catch (_error) {
-            // Cache is best-effort; ignore quota/private-mode storage failures.
-        }
         updatePageCacheStatus();
     }
 
@@ -217,6 +374,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         enforcePageCacheLimit();
         persistPageCache();
+        postJson("/api/page-cache", { key, data, scrollY: previous?.scrollY || 0 }).catch(() => {});
     }
 
     function getPageCacheEntry(key) {
@@ -226,6 +384,7 @@ document.addEventListener("DOMContentLoaded", () => {
         entry.lastUsed = Date.now();
         pageCache.set(key, entry);
         persistPageCache();
+        postJson("/api/page-cache", { key, data: entry.data, scrollY: entry.scrollY || 0 }).catch(() => {});
         return entry;
     }
 
@@ -286,48 +445,73 @@ document.addEventListener("DOMContentLoaded", () => {
     function clearPageCache() {
         pageCache.clear();
         try {
-            window.sessionStorage?.removeItem(PAGE_CACHE_STORAGE_KEY);
+            localStorage.removeItem(PAGE_CACHE_STORAGE_KEY);
         } catch (_error) {
             // Ignore storage failures; in-memory cache has already been cleared.
         }
         updatePageCacheStatus();
+        fetch("/api/settings/clear-page-cache", { method: "POST" }).catch(() => {});
     }
 
     function updatePageCacheStatus(message = "") {
         const pageCacheStatus = document.getElementById("pageCacheStatus");
         if (!pageCacheStatus) return;
-        pageCacheStatus.textContent = message || `已缓存 ${pageCache.size}/${pageCacheLimit} 个页面`;
+        pageCacheStatus.textContent = message || "页面缓存已禁用（每次都重新请求）";
     }
 
-    function proxyImageUrl(url) {
-        return url ? `/api/proxy/image?url=${encodeURIComponent(url)}` : "";
+    async function updateCookieStatus(message = "") {
+        const cookieStatus = document.getElementById("cookieStatus");
+        if (!cookieStatus) return;
+        if (message) {
+            cookieStatus.textContent = message;
+            return;
+        }
+        try {
+            const response = await fetch("/api/cookies/status");
+            const data = await response.json();
+            cookieStatus.textContent = data.hasCfClearance
+                ? `Cookie 可用，已缓存 ${data.cookieCount || 0} 个`
+                : "未检测到可用 Cookie";
+        } catch (_error) {
+            cookieStatus.textContent = "Cookie 状态读取失败";
+        }
+    }
+
+    function directImageUrl(url) {
+        return String(url || "").trim();
     }
 
     function imageUrl(url) {
-        return proxyImageUrl(url);
+        return directImageUrl(url);
+    }
+
+    function setDetailCreatorAvatar(rawUrl) {
+        if (!creatorAvatar) return;
+        const avatar = String(rawUrl || "").trim();
+        creatorAvatar.onerror = () => {
+            creatorAvatar.removeAttribute("src");
+            creatorAvatar.classList.add("hidden");
+        };
+        if (avatar) {
+            creatorAvatar.classList.remove("hidden");
+            creatorAvatar.referrerPolicy = "no-referrer";
+            creatorAvatar.src = imageUrl(avatar);
+        } else {
+            creatorAvatar.removeAttribute("src");
+            creatorAvatar.classList.add("hidden");
+        }
     }
 
     function directMediaUrl(url) {
         return url || "";
     }
 
-    function proxyVideoUrl(url) {
-        return url ? `/api/proxy/video?url=${encodeURIComponent(url)}` : "";
-    }
-
-    window.fallbackImage = (img) => {
-        const rawUrl = img?.dataset?.srcRaw;
-        if (!img || !rawUrl || img.dataset.proxyTried === "1") return;
-        img.dataset.proxyTried = "1";
-        img.src = proxyImageUrl(rawUrl);
-    };
-
     function preloadCurrentVideo() {
         if (!currentVideoUrl || currentVideoUrl.includes(".m3u8")) return;
-        if (currentVideoUrl === currentRawVideoUrl) return;
         playerWrapper.classList.remove("hidden");
         playerWrapper.classList.add("preloading");
         videoPlayer.onerror = null;
+        videoPlayer.referrerPolicy = "no-referrer";
         videoPlayer.preload = "metadata";
         if (videoPlayer.dataset.src !== currentVideoUrl) {
             videoPlayer.dataset.src = currentVideoUrl;
@@ -692,12 +876,12 @@ document.addEventListener("DOMContentLoaded", () => {
             `;
         }
 
-        userProfileHeader.style.setProperty('--avatar-url', `url('${imageUrl(creator.creatorAvatar)}')`);
+        userProfileHeader.style.setProperty('--avatar-url', 'none');
         userProfileHeader.innerHTML = `
             <div class="playlist-rows-wrapper">
                 <div class="profile-main-container">
                     <div class="profile-avatar-wrapper">
-                        <img src="${imageUrl(creator.creatorAvatar)}" data-src-raw="${escapeHtml(creator.creatorAvatar || "")}" onerror="fallbackImage(this)" alt="avatar">
+                        <img src="${imageUrl(creator.creatorAvatar)}" referrerpolicy="no-referrer" alt="avatar">
                     </div>
                     <div class="profile-content-right">
                         <h1 class="profile-display-name">${escapeHtml(creator.creatorName)}</h1>
@@ -755,140 +939,143 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function createVideoCard(vid) {
         const card = document.createElement("div");
-        card.className = "grid-item";
         const isSelected = selectedBrowseItems.has(vid.url);
         const isPlaylist = vid.url.includes("playlist?list=") || vid.isPlaylist;
+        card.className = "grid-item" + (isSelected ? " selected" : "");
+
+        const statsHtml = `
+            <div class="grid-stats-bar">
+                ${vid.duration ? `<span class="grid-stat-pill">${escapeHtml(vid.duration)}</span>` : ''}
+                ${vid.likes ? `<span class="grid-stat-pill">👍 ${escapeHtml(vid.likes)}</span>` : ''}
+                ${vid.views ? `<span class="grid-stat-pill">${escapeHtml(vid.views)}</span>` : ''}
+                ${!isPlaylist ? `<button class="grid-watch-later-mini" type="button">+ 稍后</button>` : ''}
+            </div>`;
 
         card.innerHTML = `
-            <button class="grid-select-toggle ${isSelected ? 'selected' : ''}" type="button">${isSelected ? '已选' : '选择'}</button>
-            <div class="grid-thumb-container">
-                <img src="${imageUrl(vid.thumbnail)}" data-src-raw="${escapeHtml(vid.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" class="grid-thumb" alt="cover">
-                ${vid.duration ? `<div class="grid-item-duration">${escapeHtml(vid.duration)}</div>` : ''}
+            <div class="grid-thumb-container${isSelected ? ' selected' : ''}">
+                <img src="${imageUrl(vid.thumbnail)}" referrerpolicy="no-referrer" loading="lazy" class="grid-thumb" alt="cover">
                 ${vid.videoCount ? `<div class="grid-item-playlist-badge">${escapeHtml(vid.videoCount)}</div>` : ''}
+                <div class="grid-select-overlay${isSelected ? ' visible' : ''}">✓ 已选</div>
             </div>
-            <div class="grid-title" title="${escapeHtml(vid.title || "")}">${escapeHtml(vid.title || "未命名视频")}</div>
+            ${statsHtml}
+            <button class="grid-title-btn" title="${escapeHtml(vid.title || "")}" type="button">${escapeHtml(vid.title || "未命名视频")}</button>
         `;
-        const selectButton = card.querySelector(".grid-select-toggle");
-        setBrowseSelectionState(card, selectButton, isSelected);
 
-        if (isPlaylist) {
-            selectButton.style.display = "none";
-        }
+        const thumbContainer = card.querySelector(".grid-thumb-container");
+        const selectOverlay = card.querySelector(".grid-select-overlay");
 
-        selectButton.addEventListener("click", (event) => {
-            event.stopPropagation();
-            if (selectedBrowseItems.has(vid.url)) {
-                selectedBrowseItems.delete(vid.url);
-            } else {
-                selectedBrowseItems.set(vid.url, {
-                    title: vid.title,
-                    pageUrl: vid.url,
-                    thumbnail: vid.thumbnail,
-                    downloadUrl: ""
-                });
+        // Thumbnail click = toggle selection (playlist thumbnail navigates instead)
+        thumbContainer.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (isPlaylist) {
+                const listId = new URL(vid.url).searchParams.get("list");
+                if (listId) { rememberCurrentPageScroll(); loadBrowseCategory("playlist:" + listId, 1, true); }
+                return;
             }
-            setBrowseSelectionState(card, selectButton, selectedBrowseItems.has(vid.url));
+            const nowSelected = !selectedBrowseItems.has(vid.url);
+            if (nowSelected) {
+                selectedBrowseItems.set(vid.url, { title: vid.title, pageUrl: vid.url, thumbnail: vid.thumbnail, downloadUrl: "" });
+            } else {
+                selectedBrowseItems.delete(vid.url);
+            }
+            card.classList.toggle("selected", nowSelected);
+            thumbContainer.classList.toggle("selected", nowSelected);
+            if (selectOverlay) selectOverlay.classList.toggle("visible", nowSelected);
             updateBrowseSelectionSummary();
         });
 
-        // Click card delegates to Parser or playlist browsing
-        card.addEventListener("click", () => {
+        // Title click = navigate to video detail
+        const titleBtn = card.querySelector(".grid-title-btn");
+        titleBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
             if (isPlaylist) {
                 const listId = new URL(vid.url).searchParams.get("list");
-                if (listId) {
-                    rememberCurrentPageScroll();
-                    loadBrowseCategory("playlist:" + listId, 1, true);
-                    return;
-                }
+                if (listId) { rememberCurrentPageScroll(); loadBrowseCategory("playlist:" + listId, 1, true); }
+                return;
             }
             rememberCurrentPageScroll();
             urlInput.value = vid.url;
             switchView("viewParser", false);
             parseBtn.click();
         });
+
+        // Watch-later mini button
+        card.querySelector(".grid-watch-later-mini")?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            addCardToWatchLater(vid, e.currentTarget);
+        });
+
         return card;
     }
 
     function createHomeVideoCard(vid) {
         const container = document.createElement("div");
-        container.className = "video-item-container";
         const isSelected = selectedBrowseItems.has(vid.url);
-        
+        container.className = "video-item-container" + (isSelected ? " selected-card" : "");
+
         const thumbnail = imageUrl(vid.thumbnail);
-        
+        const isPlaylist = vid.url.includes("playlist?list=");
+
         container.innerHTML = `
             <div class="horizontal-card">
-                <button class="grid-select-toggle ${isSelected ? 'selected' : ''}" type="button" style="z-index: 10;">${isSelected ? '已选' : '选择'}</button>
-                <div class="video-link">
-                    <div class="thumb-container">
-                        <img class="main-thumb" src="${thumbnail}" data-src-raw="${escapeHtml(vid.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" alt="cover">
-                        ${vid.duration ? `<div class="duration">${escapeHtml(vid.duration)}</div>` : ''}
-                        <div class="stats-container">
-                            ${vid.likes ? `<div class="stat-item"><span class="thumb-icon">👍</span> ${escapeHtml(vid.likes)}</div>` : ''}
-                            ${vid.views ? `<div class="stat-item">${escapeHtml(vid.views)}</div>` : ''}
-                        </div>
-                    </div>
-                    <div class="title" title="${escapeHtml(vid.title || "")}">
-                        ${escapeHtml(vid.title || "未命名视频")}
-                    </div>
+                <div class="thumb-container${isSelected ? ' selected' : ''}">
+                    <img class="main-thumb" src="${thumbnail}" referrerpolicy="no-referrer" loading="lazy" alt="cover">
+                    <div class="grid-select-overlay${isSelected ? ' visible' : ''}">✓ 已选</div>
                 </div>
-                ${vid.creator ? `
-                <div class="subtitle">
-                    ${escapeHtml(vid.creator)}
+                <div class="home-stats-bar">
+                    ${vid.duration ? `<span class="grid-stat-pill">${escapeHtml(vid.duration)}</span>` : ''}
+                    ${vid.likes ? `<span class="grid-stat-pill">👍 ${escapeHtml(vid.likes)}</span>` : ''}
+                    ${vid.views ? `<span class="grid-stat-pill">${escapeHtml(vid.views)}</span>` : ''}
+                    ${!isPlaylist ? `<button class="grid-watch-later-mini" type="button">+ 稍后</button>` : ''}
                 </div>
-                ` : ''}
+                <button class="home-title-btn" title="${escapeHtml(vid.title || "")}" type="button">${escapeHtml(vid.title || "未命名视频")}</button>
+                ${vid.creator ? `<div class="subtitle">${escapeHtml(vid.creator)}</div>` : ''}
             </div>
         `;
-        
-        const selectButton = container.querySelector(".grid-select-toggle");
-        
-        function setSelectionState(selected) {
-            if (selected) {
-                selectButton.classList.add("selected");
-                selectButton.innerText = "已选";
-                container.classList.add("selected-card");
-            } else {
-                selectButton.classList.remove("selected");
-                selectButton.innerText = "选择";
-                container.classList.remove("selected-card");
-            }
-        }
-        setSelectionState(isSelected);
 
-        selectButton.addEventListener("click", (event) => {
-            event.stopPropagation();
-            if (selectedBrowseItems.has(vid.url)) {
-                selectedBrowseItems.delete(vid.url);
-            } else {
-                selectedBrowseItems.set(vid.url, {
-                    title: vid.title,
-                    pageUrl: vid.url,
-                    thumbnail: vid.thumbnail,
-                    downloadUrl: ""
-                });
+        const thumbContainer = container.querySelector(".thumb-container");
+        const selectOverlay = container.querySelector(".grid-select-overlay");
+
+        // Thumbnail click = toggle selection (playlist thumbnail navigates)
+        thumbContainer.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (isPlaylist) {
+                const listId = new URL(vid.url).searchParams.get("list");
+                if (listId) { rememberCurrentPageScroll(); loadBrowseCategory("playlist:" + listId, 1, true); }
+                return;
             }
-            setSelectionState(selectedBrowseItems.has(vid.url));
+            const nowSelected = !selectedBrowseItems.has(vid.url);
+            if (nowSelected) {
+                selectedBrowseItems.set(vid.url, { title: vid.title, pageUrl: vid.url, thumbnail: vid.thumbnail, downloadUrl: "" });
+            } else {
+                selectedBrowseItems.delete(vid.url);
+            }
+            container.classList.toggle("selected-card", nowSelected);
+            thumbContainer.classList.toggle("selected", nowSelected);
+            if (selectOverlay) selectOverlay.classList.toggle("visible", nowSelected);
             updateBrowseSelectionSummary();
         });
 
-        const cardArea = container.querySelector(".video-link");
-        cardArea.addEventListener("click", (event) => {
-            if (event.target === selectButton) return;
-            if (vid.url.includes("playlist?list=")) {
+        // Title click = navigate
+        container.querySelector(".home-title-btn")?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (isPlaylist) {
                 const listId = new URL(vid.url).searchParams.get("list");
-                if (listId) {
-                    rememberCurrentPageScroll();
-                    switchView("viewBrowse", false);
-                    loadBrowseCategory("playlist:" + listId, 1, true);
-                    return;
-                }
+                if (listId) { rememberCurrentPageScroll(); loadBrowseCategory("playlist:" + listId, 1, true); }
+                return;
             }
             rememberCurrentPageScroll();
             urlInput.value = vid.url;
             switchView("viewParser", false);
             parseBtn.click();
         });
-        
+
+        // Watch-later mini
+        container.querySelector(".grid-watch-later-mini")?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            addCardToWatchLater(vid, e.currentTarget);
+        });
+
         return container;
     }
 
@@ -905,7 +1092,7 @@ document.addEventListener("DOMContentLoaded", () => {
         
         heroDiv.innerHTML = `
             <div class="hero-bg-wrapper">
-                <img class="hero-bg-img" src="${heroThumb}" data-src-raw="${escapeHtml(hero.thumbnail || "")}" onerror="fallbackImage(this)" alt="hero background">
+                <img class="hero-bg-img" src="${heroThumb}" referrerpolicy="no-referrer" alt="hero background">
                 <div class="hero-overlay"></div>
             </div>
             <div class="hero-content">
@@ -1067,15 +1254,17 @@ document.addEventListener("DOMContentLoaded", () => {
             history.pushState({ view: "viewBrowse", search: true, page, filters: currentSearchState }, "", buildSearchHash(page));
         }
 
-        videoGrid.innerHTML = "";
-        browseLoader.classList.remove("hidden");
         if (restoreCachedBrowsePage(cacheKey)) {
             return;
         }
 
+        videoGrid.innerHTML = "";
+        browseLoader.classList.remove("hidden");
+
         try {
             const response = await fetch(`/api/search?${buildSearchParams(page).toString()}`);
             if (!response.ok) {
+                if (response.status === 503) showCookieBlockedBanner();
                 throw new Error(await response.text() || "搜索失败");
             }
             const data = await response.json();
@@ -1127,18 +1316,8 @@ document.addEventListener("DOMContentLoaded", () => {
         return actions.join("");
     }
 
-    function proxiedImageUrl(url) {
-        return proxyImageUrl(url);
-    }
-
     function historyCoverUrl(task) {
-        if (!task || (!task.pageUrl && !task.thumbnail)) return "";
-        const params = new URLSearchParams();
-        params.set("url", task.pageUrl || task.thumbnail || "");
-        if (task.thumbnail) {
-            params.set("thumbnail", task.thumbnail);
-        }
-        return `/api/proxy/history-cover?${params.toString()}`;
+        return imageUrl(task?.thumbnail || "");
     }
 
     // 封面图片横竖检测
@@ -1217,12 +1396,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const pageUrl = escapeHtml(task.pageUrl || "");
             const clickableClass = task.pageUrl ? "is-clickable" : "";
             const coverUrl = historyCoverUrl(task);
-            const fallbackCoverUrl = proxiedImageUrl(task.thumbnail);
             const cover = coverUrl
-                ? `<img src="${coverUrl}" class="download-history-thumb" alt="cover" loading="lazy" onerror="this.style.display='none'" onload="setHistoryCoverOrientation(this)" data-fallback-src="${escapeHtml(fallbackCoverUrl)}">`
-                : (fallbackCoverUrl
-                    ? `<img src="${fallbackCoverUrl}" class="download-history-thumb" alt="cover" loading="lazy" onload="setHistoryCoverOrientation(this)">`
-                    : renderHistoryPlaceholder());
+                ? `<img src="${escapeHtml(coverUrl)}" class="download-history-thumb" alt="cover" referrerpolicy="no-referrer" loading="lazy" onload="setHistoryCoverOrientation(this)">`
+                : renderHistoryPlaceholder();
             return `
             <article class="download-card history ${clickableClass} ${String(task.status || "").toLowerCase()}" data-page-url="${pageUrl}" tabindex="${task.pageUrl ? '0' : '-1'}">
                 <div class="download-history-cover">
@@ -1242,7 +1418,6 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
         }).join("");
         bindHistoryCardInteractions();
-        bindHistoryCoverFallbacks();
     }
 
     function openHistoryTask(pageUrl) {
@@ -1268,20 +1443,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     event.preventDefault();
                     openHistoryTask(card.dataset.pageUrl);
                 }
-            });
-        });
-    }
-
-    function bindHistoryCoverFallbacks() {
-        downloadHistoryList.querySelectorAll(".download-history-thumb[data-fallback-src]").forEach((image) => {
-            image.addEventListener("error", () => {
-                const fallbackSrc = image.dataset.fallbackSrc;
-                if (fallbackSrc && image.dataset.fallbackTried !== "true") {
-                    image.dataset.fallbackTried = "true";
-                    image.src = fallbackSrc;
-                    return;
-                }
-                image.replaceWith(createHistoryPlaceholderElement());
             });
         });
     }
@@ -1435,13 +1596,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function clearDownloadHistory() {
-        const response = await fetch("/api/downloads/history/clear", {
-            method: "POST"
-        });
+        const response = await fetch("/api/downloads/history/clear", { method: "POST" });
         if (!response.ok) {
             const errorText = await response.text();
             throw new Error(errorText || "清空下载历史失败");
         }
+        // Also clear local image cache
+        fetch("/api/settings/clear-cache", { method: "POST" }).catch(() => {});
     }
 
     function buildCurrentDownloadItem() {
@@ -1477,24 +1638,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         return items;
-    }
-
-    function scheduleCfModal() {
-        if (cfModalTimer) {
-            clearTimeout(cfModalTimer);
-        }
-        cfModalTimer = setTimeout(() => {
-            cfModal.classList.remove("hidden");
-            cfModalTimer = null;
-        }, 1200);
-    }
-
-    function hideCfModal() {
-        if (cfModalTimer) {
-            clearTimeout(cfModalTimer);
-            cfModalTimer = null;
-        }
-        cfModal.classList.add("hidden");
     }
 
     function updateSeriesDownloadButton() {
@@ -1533,7 +1676,7 @@ document.addEventListener("DOMContentLoaded", () => {
             card.className = "grid-item related-grid-item";
             card.innerHTML = `
                 <div class="grid-thumb-container">
-                    <img src="${imageUrl(item.thumbnail)}" data-src-raw="${escapeHtml(item.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" class="grid-thumb" alt="cover">
+                    <img src="${imageUrl(item.thumbnail)}" referrerpolicy="no-referrer" loading="lazy" class="grid-thumb" alt="cover">
                 </div>
                 <div class="grid-title" title="${escapeHtml(item.title || "")}">${escapeHtml(item.title || "未命名视频")}</div>
             `;
@@ -1544,28 +1687,71 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             relatedVideoGrid.appendChild(card);
         });
-
     }
 
     function renderCommentAvatar(comment, className = "comment-avatar") {
         const userName = comment?.userName || "?";
         if (comment?.avatarUrl) {
-            return `<img class="${className}" src="${imageUrl(comment.avatarUrl)}" alt="avatar" loading="lazy">`;
+            return `<img class="${className}" src="${imageUrl(comment.avatarUrl)}" alt="avatar" referrerpolicy="no-referrer" loading="lazy">`;
         }
         return `<div class="${className} placeholder">${escapeHtml(userName.slice(0, 1))}</div>`;
+    }
+
+    function renderCommentReplyForm(commentId) {
+        return `
+            <form class="comment-reply-create-form hidden" data-reply-form-for="${escapeHtml(commentId)}">
+                <input class="comment-reply-text-input" type="text" name="reply-comment-text" placeholder="新增一则公开评论..." autocomplete="off">
+                <button class="comment-reply-submit-btn" type="submit">送出</button>
+            </form>
+        `;
+    }
+
+    function renderVideoCommentForm() {
+        const avatar = renderCommentAvatar({
+            userName: authState.username || "我",
+            avatarUrl: currentCommentContext.avatarUrl || authState.avatarUrl
+        }, "comment-create-avatar");
+        return `
+            <form class="comment-create-form" id="videoCommentCreateForm">
+                ${avatar}
+                <input class="comment-create-text-input" type="text" name="comment-text" placeholder="新增一则公开评论..." autocomplete="off">
+                <button class="comment-create-submit-btn" type="submit">送出</button>
+            </form>
+        `;
+    }
+
+    function renderCommentLikeActions(comment) {
+        const commentId = escapeHtml(comment.commentId || "");
+        const foreignType = escapeHtml(comment.foreignType || "comment");
+        const foreignId = escapeHtml(comment.foreignId || comment.commentId || "");
+        const likeCount = Number(comment.likeCount || 0);
+        const likeTotal = Number(comment.likeTotal || 0);
+        const isLiked = String(comment.likeStatus || "") === "1";
+        const isUnliked = String(comment.unlikeStatus || "") === "1";
+        const countText = likeCount ? `<span class="comment-like-count">${escapeHtml(likeCount)}</span>` : "";
+        return `
+            <button class="comment-like-action${isLiked ? " active" : ""}" type="button" data-comment-id="${commentId}" data-foreign-type="${foreignType}" data-foreign-id="${foreignId}" data-positive="1" data-like-user-id="${escapeHtml(comment.likeUserId || currentCommentContext.currentUserId || authState.userId || "")}" data-like-status="${escapeHtml(comment.likeStatus || "")}" data-unlike-status="${escapeHtml(comment.unlikeStatus || "")}" data-like-count="${escapeHtml(likeCount)}" data-like-total="${escapeHtml(likeTotal)}" aria-label="点赞">
+                <span class="material-icons-${isLiked ? "sharp" : "outlined"}">thumb_up</span>
+                ${countText}
+            </button>
+            <button class="comment-like-action${isUnliked ? " active" : ""}" type="button" data-comment-id="${commentId}" data-foreign-type="${foreignType}" data-foreign-id="${foreignId}" data-positive="0" data-like-user-id="${escapeHtml(comment.likeUserId || currentCommentContext.currentUserId || authState.userId || "")}" data-like-status="${escapeHtml(comment.likeStatus || "")}" data-unlike-status="${escapeHtml(comment.unlikeStatus || "")}" data-like-count="${escapeHtml(likeCount)}" data-like-total="${escapeHtml(likeTotal)}" aria-label="点踩">
+                <span class="material-icons-${isUnliked ? "sharp" : "outlined"}">thumb_down</span>
+            </button>
+        `;
     }
 
     function renderComments(comments = []) {
         const list = Array.isArray(comments) ? comments : [];
         if (!commentsList || !commentsCount) return;
         commentsCount.textContent = list.length;
+        const createForm = renderVideoCommentForm();
 
         if (list.length === 0) {
-            commentsList.innerHTML = `<div class="empty-playlist">暂无评论</div>`;
+            commentsList.innerHTML = `${createForm}<div class="empty-playlist">暂无评论</div>`;
             return;
         }
 
-        commentsList.innerHTML = list.map((comment) => {
+        commentsList.innerHTML = createForm + list.map((comment) => {
             const commentId = escapeHtml(comment.commentId || "");
             const avatar = renderCommentAvatar(comment);
             const replyCount = Number(comment.replyCount || 0);
@@ -1580,14 +1766,31 @@ document.addEventListener("DOMContentLoaded", () => {
                         </div>
                         <div class="comment-content">${escapeHtml(comment.content || "")}</div>
                         <div class="comment-actions">
-                            ${comment.likeCount ? `<span>${escapeHtml(comment.likeCount)} 赞</span>` : ""}
+                            ${renderCommentLikeActions(comment)}
+                            ${comment.commentId ? `<button class="comment-reply-toggle-btn" type="button" data-comment-id="${commentId}">回复</button>` : ""}
                             ${canLoadReplies ? `<button class="comment-reply-btn" type="button" data-comment-id="${commentId}">查看回复${replyCount ? ` (${replyCount})` : ""}</button>` : ""}
                         </div>
+                        ${comment.commentId ? renderCommentReplyForm(comment.commentId) : ""}
                         <div class="comment-replies" data-replies-for="${commentId}"></div>
                     </div>
                 </article>
             `;
         }).join("");
+    }
+
+    function applyCommentsPayload(payload) {
+        if (Array.isArray(payload)) {
+            currentCommentContext = { csrfToken: "", currentUserId: "", avatarUrl: "", videoId: currentVideoData?.videoId || "" };
+            renderComments(payload);
+            return;
+        }
+        currentCommentContext = {
+            csrfToken: String(payload?.csrfToken || ""),
+            currentUserId: String(payload?.currentUserId || ""),
+            avatarUrl: String(payload?.avatarUrl || ""),
+            videoId: String(payload?.videoId || currentVideoData?.videoId || "")
+        };
+        renderComments(payload?.comments || []);
     }
 
     function renderReplies(commentId, replies = []) {
@@ -1629,10 +1832,135 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!response.ok) {
                 throw new Error(await response.text() || "评论载入失败");
             }
-            renderComments(await response.json());
+            applyCommentsPayload(await response.json());
         } catch (error) {
             commentsCount.textContent = "0";
             commentsList.innerHTML = `<div class="empty-playlist">评论载入失败: ${escapeHtml(error.message)}</div>`;
+        }
+    }
+
+    function toggleCommentReplyForm(commentId) {
+        if (!commentId || !commentsList) return;
+        const form = commentsList.querySelector(`[data-reply-form-for="${CSS.escape(commentId)}"]`);
+        if (!form) return;
+        const isHidden = form.classList.toggle("hidden");
+        if (!isHidden) {
+            const input = form.querySelector(".comment-reply-text-input");
+            input?.focus();
+        }
+    }
+
+    async function toggleCommentLike(button) {
+        if (!button || !requireLogin()) return;
+        const csrfToken = currentCommentContext.csrfToken || currentVideoData?.csrfToken || "";
+        const foreignType = button.dataset.foreignType || "comment";
+        const foreignId = button.dataset.foreignId || button.dataset.commentId || "";
+        const isPositive = button.dataset.positive || "";
+        const likeStatus = button.dataset.likeStatus || "";
+        const unlikeStatus = button.dataset.unlikeStatus || "";
+        if (!csrfToken || !foreignId || !isPositive) {
+            alert("缺少点赞凭证，请重新载入评论后再操作");
+            return;
+        }
+        button.disabled = true;
+        try {
+            if ((isPositive === "1" && unlikeStatus === "1") || (isPositive === "0" && likeStatus === "1")) {
+                const cancelPositive = likeStatus === "1" ? "1" : "0";
+                await postJson("/api/comments/like", {
+                    csrfToken,
+                    foreignType,
+                    foreignId,
+                    isPositive: cancelPositive,
+                    likeUserId: button.dataset.likeUserId || currentCommentContext.currentUserId || authState.userId || "",
+                    likeStatus,
+                    unlikeStatus,
+                    likeCount: button.dataset.likeCount || "0",
+                    likeTotal: button.dataset.likeTotal || "0"
+                });
+                await loadComments(currentCommentContext.videoId || currentVideoData?.videoId || "");
+                const nextButton = commentsList?.querySelector(`.comment-like-action[data-foreign-id="${CSS.escape(foreignId)}"][data-positive="${CSS.escape(isPositive)}"]`);
+                if (nextButton) {
+                    await toggleCommentLike(nextButton);
+                }
+                return;
+            }
+            const result = await postJson("/api/comments/like", {
+                csrfToken,
+                foreignType,
+                foreignId,
+                isPositive,
+                likeUserId: button.dataset.likeUserId || currentCommentContext.currentUserId || authState.userId || "",
+                likeStatus,
+                unlikeStatus,
+                likeCount: button.dataset.likeCount || "0",
+                likeTotal: button.dataset.likeTotal || "0"
+            });
+            if (result?.csrf_token) currentCommentContext.csrfToken = result.csrf_token;
+            await loadComments(currentCommentContext.videoId || currentVideoData?.videoId || "");
+        } catch (error) {
+            alert(`赞踩失败: ${error.message}`);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function submitCommentReply(commentId, form) {
+        if (!commentId || !form || !requireLogin()) return;
+        const input = form.querySelector(".comment-reply-text-input");
+        const button = form.querySelector(".comment-reply-submit-btn");
+        const text = String(input?.value || "").trim();
+        if (!text) return;
+        const csrfToken = currentCommentContext.csrfToken || currentVideoData?.csrfToken || "";
+        if (!csrfToken) {
+            alert("缺少 CSRF token，请重新解析视频详情后再回复");
+            return;
+        }
+        if (button) button.disabled = true;
+        try {
+            const result = await postJson("/api/replies/create", {
+                commentId,
+                csrfToken,
+                text
+            });
+            if (result?.csrf_token) currentCommentContext.csrfToken = result.csrf_token;
+            if (input) input.value = "";
+            form.classList.add("hidden");
+            await loadReplies(commentId);
+        } catch (error) {
+            alert(`回复失败: ${error.message}`);
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
+    async function submitVideoComment(form) {
+        if (!form || !requireLogin()) return;
+        const input = form.querySelector(".comment-create-text-input");
+        const button = form.querySelector(".comment-create-submit-btn");
+        const text = String(input?.value || "").trim();
+        if (!text) return;
+        const csrfToken = currentCommentContext.csrfToken || "";
+        const videoId = currentCommentContext.videoId || currentVideoData?.videoId || "";
+        const currentUserId = currentCommentContext.currentUserId || authState.userId || "";
+        if (!csrfToken || !videoId || !currentUserId) {
+            alert("缺少评论表单凭证，请重新载入评论后再发布");
+            return;
+        }
+        if (button) button.disabled = true;
+        try {
+            const result = await postJson("/api/comments/create", {
+                videoId,
+                currentUserId,
+                csrfToken,
+                text
+            });
+            if (result?.csrf_token) currentCommentContext.csrfToken = result.csrf_token;
+            if (input) input.value = "";
+            await loadComments(videoId);
+        } catch (error) {
+            alert(`评论失败: ${error.message}`);
+        } finally {
+            if (button) button.disabled = false;
         }
     }
 
@@ -1658,6 +1986,581 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    function updateVideoAccountActions() {
+        if (!currentVideoData) {
+            [favoriteVideoBtn, watchLaterBtn, myListBtn, subscribeCreatorBtn].forEach(btn => {
+                if (btn) btn.disabled = true;
+            });
+            return;
+        }
+        if (favoriteVideoBtn) {
+            favoriteVideoBtn.disabled = false;
+            favoriteVideoBtn.classList.toggle("selected-action", !!currentVideoData.isFav);
+            favoriteVideoBtn.textContent = currentVideoData.isFav ? "已喜欢" : "喜欢";
+        }
+        if (watchLaterBtn) {
+            const isWatchLater = !!currentVideoData.myList?.isWatchLater;
+            watchLaterBtn.disabled = false;
+            watchLaterBtn.classList.toggle("selected-action", isWatchLater);
+            watchLaterBtn.textContent = isWatchLater ? "已稍后观看" : "稍后观看";
+        }
+        if (myListBtn) {
+            myListBtn.disabled = !(currentVideoData.myList?.items || []).length;
+        }
+        if (subscribeCreatorBtn) {
+            const post = currentVideoData.creator?.post;
+            subscribeCreatorBtn.classList.toggle("hidden", !post);
+            subscribeCreatorBtn.disabled = !post;
+            subscribeCreatorBtn.textContent = post?.isSubscribed ? "已关注" : "关注";
+            subscribeCreatorBtn.classList.toggle("selected-action", !!post?.isSubscribed);
+        }
+    }
+
+    async function addCardToWatchLater(vid, button) {
+        if (!requireLogin()) return;
+        button.disabled = true;
+        const isAdded = watchLaterCardState.get(vid.url) || false;
+        const newState = !isAdded;
+        const payload = {
+            videoId: videoIdFromUrl(vid.url),
+            pageUrl: vid.url,
+            isChecked: newState
+        };
+        try {
+            const result = await postJson("/api/video/watch-later", payload);
+            watchLaterCardState.set(vid.url, newState);
+            button.textContent = newState ? "✓ 稍后" : "+ 稍后";
+            button.classList.toggle("selected-action", newState);
+        } catch (error) {
+            alert(`稍后观看操作失败: ${error.message}`);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function recordCurrentWatchHistory() {
+        if (!currentVideoData) return;
+        try {
+            await postJson("/api/watch-history/record", {
+                videoId: currentVideoData.videoId || videoIdFromUrl(urlInput.value),
+                title: currentVideoData.title || mainTitle.textContent || "未命名视频",
+                pageUrl: urlInput.value,
+                thumbnail: currentVideoData.thumbnail || ""
+            });
+        } catch (_error) {
+            // Watching should not be blocked by local history persistence.
+        }
+    }
+
+    function isBulkManageableProfileSection(section = activeProfileSection) {
+        return section === "watchLater" || section === "likes";
+    }
+
+    function profileItemKey(item) {
+        return item?.url || item?.pageUrl || item?.link || item?.videoId || item?.title || "";
+    }
+
+    function renderProfileBulkToolbar(section, items = []) {
+        const titleRow = profileSectionTitle?.parentElement;
+        if (!titleRow) return;
+        let toolbar = titleRow.querySelector(".profile-bulk-toolbar");
+        if (!isBulkManageableProfileSection(section)) {
+            toolbar?.remove();
+            return;
+        }
+        if (!toolbar) {
+            toolbar = document.createElement("div");
+            toolbar.className = "profile-bulk-toolbar";
+            titleRow.appendChild(toolbar);
+        }
+        const selectedCount = profileSelectedItems.size;
+        toolbar.innerHTML = `
+            <button class="btn-secondary profile-bulk-toggle" type="button">${profileBulkMode ? "退出管理" : "批量管理"}</button>
+            <button class="btn-secondary profile-bulk-select-all" type="button" ${profileBulkMode ? "" : "disabled"}>全选本页</button>
+            <button class="btn-secondary profile-bulk-clear" type="button" ${profileBulkMode ? "" : "disabled"}>取消选择</button>
+            <button class="btn-secondary profile-bulk-delete" type="button" ${profileBulkMode && selectedCount ? "" : "disabled"}>删除选中 ${selectedCount ? `(${selectedCount})` : ""}</button>
+        `;
+        toolbar.querySelector(".profile-bulk-toggle")?.addEventListener("click", () => toggleProfileBulkMode(section, items));
+        toolbar.querySelector(".profile-bulk-select-all")?.addEventListener("click", () => {
+            items.forEach(item => {
+                const key = profileItemKey(item);
+                if (key) profileSelectedItems.set(key, item);
+            });
+            renderProfileSectionItems(section, items);
+        });
+        toolbar.querySelector(".profile-bulk-clear")?.addEventListener("click", () => {
+            profileSelectedItems.clear();
+            renderProfileSectionItems(section, items);
+        });
+        toolbar.querySelector(".profile-bulk-delete")?.addEventListener("click", () => deleteSelectedProfileItems(section));
+    }
+
+    function toggleProfileBulkMode(section, items = []) {
+        profileBulkMode = !profileBulkMode;
+        profileSelectedItems.clear();
+        renderProfileSectionItems(section, items);
+    }
+
+    function renderProfileSectionItems(section, items = []) {
+        if (!profileSectionGrid) return;
+        currentProfileSectionItems = Array.isArray(items) ? items : [];
+        renderProfileBulkToolbar(section, items);
+        profileSectionGrid.innerHTML = "";
+        if (!items.length) {
+            profileSectionGrid.innerHTML = `<div class="empty-playlist">暂无内容</div>`;
+            return;
+        }
+        items.forEach(item => profileSectionGrid.appendChild(createProfileItemCard(item, section)));
+    }
+
+    async function deleteSelectedProfileItems(section) {
+        if (!isBulkManageableProfileSection(section) || !profileSelectedItems.size || !requireLogin()) return;
+        const selected = Array.from(profileSelectedItems.values());
+        const failed = [];
+        for (const item of selected) {
+            const target = item.url || item.pageUrl || item.link || "";
+            const videoId = item.videoId || videoIdFromUrl(target);
+            try {
+                if (section === "watchLater") {
+                    await postJson("/api/video/watch-later", {
+                        videoId,
+                        pageUrl: target,
+                        listCode: item.listCode || item.watchLaterCode || "WL",
+                        isChecked: false
+                    });
+                } else if (section === "likes") {
+                    await postJson("/api/video/favorite", {
+                        videoId,
+                        pageUrl: target,
+                        isFav: true
+                    });
+                }
+            } catch (error) {
+                failed.push(item.title || item.name || target || videoId);
+            }
+        }
+        profileSelectedItems.clear();
+        profileBulkMode = false;
+        await loadProfileSection(section, activeProfilePage, false);
+        if (failed.length) {
+            alert(`部分删除失败: ${failed.slice(0, 5).join("、")}${failed.length > 5 ? "..." : ""}`);
+        }
+    }
+
+    function createProfileItemCard(item, bulkSection = "") {
+        if (item.isCreator) {
+            return createCreatorProfileCard(item);
+        }
+        const enableBulk = profileBulkMode && isBulkManageableProfileSection(bulkSection);
+        const key = profileItemKey(item);
+        const card = document.createElement(enableBulk ? "article" : "button");
+        card.className = "profile-preview-card";
+        if (!enableBulk) card.type = "button";
+        if (enableBulk) {
+            card.tabIndex = 0;
+            card.classList.add("profile-bulk-card");
+            if (profileSelectedItems.has(key)) card.classList.add("selected");
+        }
+        card.innerHTML = `
+            ${enableBulk ? `<label class="profile-bulk-check-wrap"><input class="profile-bulk-check" type="checkbox" ${profileSelectedItems.has(key) ? "checked" : ""} aria-label="选择"></label>` : ""}
+            <img src="${imageUrl(item.thumbnail || item.cover || "")}" referrerpolicy="no-referrer" loading="lazy" alt="cover">
+            <div>${escapeHtml(item.title || item.name || "未命名内容")}</div>
+        `;
+        card.querySelector(".profile-bulk-check")?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (!key) return;
+            if (event.currentTarget.checked) {
+                profileSelectedItems.set(key, item);
+            } else {
+                profileSelectedItems.delete(key);
+            }
+            renderProfileBulkToolbar(bulkSection, currentProfileSectionItems);
+        });
+        card.addEventListener("click", () => {
+            if (enableBulk) {
+                if (!key) return;
+                if (profileSelectedItems.has(key)) {
+                    profileSelectedItems.delete(key);
+                } else {
+                    profileSelectedItems.set(key, item);
+                }
+                renderProfileSectionItems(bulkSection, currentProfileSectionItems);
+                return;
+            }
+            const target = item.url || item.pageUrl || item.link;
+            if (!target) return;
+            if (target.includes("playlist?list=")) {
+                const listId = new URL(target, window.location.href).searchParams.get("list");
+                if (listId) loadBrowseCategory("playlist:" + listId, 1, true);
+                return;
+            }
+            loadParserUrl(target, true, true);
+        });
+        return card;
+    }
+
+    function createCreatorProfileCard(item) {
+        const card = document.createElement("button");
+        card.className = "profile-preview-card creator-profile-card";
+        card.type = "button";
+        card.dataset.creatorKey = item.searchQuery || item.name || "";
+        const initial = (item.name || "?").charAt(0).toUpperCase();
+        const avatarHtml = item.avatarUrl
+            ? `<img class="creator-avatar-img" src="${imageUrl(item.avatarUrl)}" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy" alt="${escapeHtml(item.name || "")}"><span class="creator-avatar-initial" style="display:none">${escapeHtml(initial)}</span>`
+            : `<span class="creator-avatar-initial">${escapeHtml(initial)}</span>`;
+        card.innerHTML = `
+            <div class="creator-avatar-wrap">${avatarHtml}</div>
+            <div class="creator-card-name">${escapeHtml(item.name || "未知作者")}</div>
+        `;
+        card.addEventListener("click", () => {
+            // Navigate to subscription detail view with this creator pre-selected
+            loadSubscriptionDetailView(true, item.searchQuery || item.name || "");
+        });
+        return card;
+    }
+
+    async function loadProfileSummary(pushState = true) {
+        if (!requireLogin()) return;
+        switchView("viewProfile", false);
+        if (pushState) history.pushState({ view: "viewProfile" }, "", "#profile");
+        profileSectionDetail?.classList.add("hidden");
+        subscriptionCreatorStrip?.classList.add("hidden");
+        profilePageHeader?.classList.remove("hidden");
+
+        // Fetch user info
+        try {
+            const response = await fetch("/api/auth/me");
+            if (response.ok) {
+                const user = await response.json();
+                if (profilePageHeader && user.username) {
+                    profilePageHeader.innerHTML = `
+                        <img class="profile-page-avatar" src="${imageUrl(user.avatarUrl || "")}" referrerpolicy="no-referrer" alt="avatar">
+                        <div><h1>${escapeHtml(user.username || "个人主页")}</h1><p>稍后观看、喜欢、播放清单、订阅与观看历史</p></div>
+                    `;
+                }
+            }
+        } catch (_error) {}
+
+        // Render section frameworks immediately
+        if (profileSections) {
+            profileSections.innerHTML = "";
+            const sections = ["watchLater", "likes", "playlists", "subscriptions", "histories"];
+            const titles = { watchLater: "稍后观看", likes: "喜欢的影片", playlists: "播放清单", subscriptions: "我的订阅", histories: "浏览记录" };
+            sections.forEach(section => {
+                const row = document.createElement("section");
+                row.className = "profile-section-row";
+                row.id = `profile-section-${section}`;
+                row.innerHTML = `
+                    <button class="profile-section-heading" type="button">
+                        <span>${escapeHtml(titles[section])}</span>
+                        <span>查看全部</span>
+                    </button>
+                    <div class="profile-preview-row"></div>
+                `;
+                row.querySelector(".profile-section-heading").addEventListener("click", () => loadProfileSection(section, 1, true));
+                profileSections.appendChild(row);
+                // Load each section asynchronously
+                loadProfileSectionPreview(section, row.querySelector(".profile-preview-row"));
+            });
+        }
+    }
+
+    async function loadProfileSectionPreview(section, container) {
+        container.innerHTML = `<div class="empty-playlist">正在载入...</div>`;
+        try {
+            const response = await fetch(`/api/profile/section/${section}?page=1`);
+            if (!response.ok) throw new Error("加载失败");
+            const data = await response.json();
+            container.innerHTML = "";
+            const items = (data.items || []).slice(0, 6);
+            if (items.length === 0) {
+                container.innerHTML = `<div class="empty-playlist">暂无内容</div>`;
+            } else {
+                items.forEach(item => container.appendChild(createProfileItemCard(item)));
+                // Lazy-fetch real avatars for subscription creators
+                if (section === "subscriptions") {
+                    items.filter(item => item.isCreator && !item.avatarUrl).forEach(item => {
+                        const key = item.searchQuery || item.name || "";
+                        if (!key) return;
+                        const ep = item.userId
+                            ? `/api/creator/info?userId=${encodeURIComponent(item.userId)}`
+                            : `/api/creator/by-name?name=${encodeURIComponent(key)}`;
+                        fetch(ep).then(r => r.ok ? r.json() : null).then(info => {
+                            const av = info?.avatarUrl || info?.creatorAvatar || "";
+                            if (!av) return;
+                            const cardEl = container.querySelector(`[data-creator-key="${CSS.escape(key)}"]`);
+                            if (cardEl && !cardEl.querySelector(".creator-avatar-img")) {
+                                const wrap = cardEl.querySelector(".creator-avatar-wrap");
+                                const initEl = cardEl.querySelector(".creator-avatar-initial");
+                                if (wrap && initEl) {
+                                    const img = document.createElement("img");
+                                    img.className = "creator-avatar-img";
+                                    img.referrerPolicy = "no-referrer";
+                                    img.src = imageUrl(av);
+                                    img.loading = "lazy";
+                                    img.alt = item.name || "";
+                                    img.onerror = function() { this.style.display = "none"; initEl.style.display = "flex"; };
+                                    initEl.style.display = "none";
+                                    wrap.insertBefore(img, initEl);
+                                }
+                            }
+                        }).catch(() => {});
+                    });
+                }
+            }
+        } catch (error) {
+            container.innerHTML = `<div class="empty-playlist">加载失败: ${escapeHtml(error.message)}</div>`;
+        }
+    }
+
+
+    async function loadProfileSection(section, page = 1, pushState = true) {
+        if (section === "subscriptions") {
+            loadSubscriptionDetailView(pushState);
+            return;
+        }
+        activeProfileSection = section;
+        activeProfilePage = page;
+        switchView("viewProfile", false);
+        if (pushState) history.pushState({ view: "viewProfile", section, page }, "", `#profile-${section}-${page}`);
+        profileSections?.classList.add("hidden");
+        profileSectionDetail?.classList.remove("hidden");
+        subscriptionCreatorStrip?.classList.add("hidden");
+        profilePageHeader?.classList.add("hidden");
+        if (profilePaginationBar) profilePaginationBar.classList.remove("hidden");
+        if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">正在载入...</div>`;
+        profileBulkMode = false;
+        profileSelectedItems.clear();
+        const response = await fetch(`/api/profile/section/${encodeURIComponent(section)}?page=${page}`);
+        if (!response.ok) {
+            if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">${escapeHtml(await response.text() || "载入失败")}</div>`;
+            return;
+        }
+        const data = await response.json();
+        activeProfileTotalPages = Number(data.totalPages || 1);
+        if (profileSectionTitle) profileSectionTitle.textContent = data.title || section;
+        if (profilePageIndicator) profilePageIndicator.textContent = `${page} / ${activeProfileTotalPages}`;
+        if (profilePrevPageBtn) profilePrevPageBtn.disabled = page <= 1;
+        if (profileNextPageBtn) profileNextPageBtn.disabled = page >= activeProfileTotalPages;
+        renderProfileSectionItems(section, data.items || []);
+    }
+
+    async function loadSubscriptionDetailView(pushState = true, preSelectKey = null) {
+        activeProfileSection = "subscriptions";
+        activeProfilePage = 1;
+        switchView("viewProfile", false);
+        if (pushState) history.pushState({ view: "viewProfile", section: "subscriptions", page: 1 }, "", "#profile-subscriptions-1");
+        profileSections?.classList.add("hidden");
+        profileSectionDetail?.classList.remove("hidden");
+        profilePageHeader?.classList.add("hidden");
+        if (profileSectionTitle) profileSectionTitle.textContent = "我的订阅";
+        if (profilePaginationBar) profilePaginationBar.classList.add("hidden");
+        if (subscriptionCreatorStrip) subscriptionCreatorStrip.classList.remove("hidden");
+
+        // Show cached creators immediately for instant display
+        const cachedCreators = lsGet(LS_SUB_CREATORS_KEY);
+        if (cachedCreators && cachedCreators.length > 0) {
+            renderSubscriptionCreatorStrip(cachedCreators, preSelectKey);
+            const target = preSelectKey
+                ? (cachedCreators.find(c => (c.searchQuery || c.name) === preSelectKey) || cachedCreators[0])
+                : cachedCreators[0];
+            if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">请在上方选择作者查看作品</div>`;
+            if (target) loadSubscriptionCreatorVideos(target);
+        } else {
+            if (subscriptionCreatorStrip) subscriptionCreatorStrip.innerHTML = `<div class="empty-playlist" style="width:100%">正在载入作者...</div>`;
+            if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">请在上方选择作者查看作品</div>`;
+        }
+
+        // Background fetch to refresh
+        try {
+            const resp = await fetch("/api/profile/section/subscriptions?page=1");
+            if (!resp.ok) throw new Error(await resp.text() || "载入失败");
+            const data = await resp.json();
+            let creators = [...(data.items || [])];
+            const totalPages = Number(data.totalPages || 1);
+
+            if (totalPages > 1) {
+                for (let p = 2; p <= totalPages; p++) {
+                    const r = await fetch(`/api/profile/section/subscriptions?page=${p}`);
+                    if (r.ok) {
+                        const d = await r.json();
+                        (d.items || []).forEach(c => {
+                            if (!creators.some(e => (e.searchQuery || e.name) === (c.searchQuery || c.name))) {
+                                creators.push(c);
+                            }
+                        });
+                    }
+                }
+            }
+
+            lsSet(LS_SUB_CREATORS_KEY, creators);
+
+            // Only re-render if no cached version was shown; otherwise silently update avatars
+            if (!cachedCreators) {
+                renderSubscriptionCreatorStrip(creators, preSelectKey);
+                const target = preSelectKey
+                    ? (creators.find(c => (c.searchQuery || c.name) === preSelectKey) || creators[0])
+                    : creators[0];
+                if (target) loadSubscriptionCreatorVideos(target);
+            } else {
+                updateSubscriptionCreatorAvatars(creators);
+            }
+        } catch (err) {
+            if (!cachedCreators && subscriptionCreatorStrip) {
+                subscriptionCreatorStrip.innerHTML = `<div class="empty-playlist" style="width:100%">载入失败: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+    }
+
+    function updateSubscriptionCreatorAvatars(freshCreators) {
+        if (!subscriptionCreatorStrip) return;
+        freshCreators.forEach(creator => {
+            if (!creator.avatarUrl) return;
+            const key = creator.searchQuery || creator.name || "";
+            const chip = subscriptionCreatorStrip.querySelector(`[data-search-query="${CSS.escape(key)}"]`);
+            if (!chip) return;
+            const existing = chip.querySelector(".sub-creator-chip-avatar");
+            if (existing) return; // Already has avatar image
+            const initial = chip.querySelector(".sub-creator-chip-initial");
+            if (!initial) return;
+            const img = document.createElement("img");
+            img.className = "sub-creator-chip-avatar";
+            img.referrerPolicy = "no-referrer";
+            img.src = imageUrl(creator.avatarUrl);
+            img.loading = "lazy";
+            img.alt = escapeHtml(creator.name || "");
+            img.onerror = () => { img.style.display = "none"; initial.style.display = "flex"; };
+            chip.insertBefore(img, initial);
+            initial.style.display = "none";
+        });
+    }
+
+    function renderSubscriptionCreatorStrip(creators, selectedQuery) {
+        if (!subscriptionCreatorStrip) return;
+        const currentActive = selectedQuery ?? subscriptionCreatorStrip.querySelector(".sub-creator-chip.active")?.dataset.searchQuery ?? null;
+        subscriptionCreatorStrip.innerHTML = "";
+        creators.forEach(creator => {
+            const isActive = (creator.searchQuery || creator.name) === currentActive;
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "sub-creator-chip" + (isActive ? " active" : "");
+            chip.dataset.searchQuery = creator.searchQuery || creator.name || "";
+            const initial = (creator.name || "?").charAt(0).toUpperCase();
+            const buildAvatarHtml = (avatarUrl) => avatarUrl
+                ? `<img class="sub-creator-chip-avatar" src="${imageUrl(avatarUrl)}" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy" alt="${escapeHtml(creator.name || "")}"><span class="sub-creator-chip-initial" style="display:none">${escapeHtml(initial)}</span>`
+                : `<span class="sub-creator-chip-initial">${escapeHtml(initial)}</span>`;
+            chip.innerHTML = `${buildAvatarHtml(creator.avatarUrl)}<span class="sub-creator-chip-name">${escapeHtml(creator.name || "未知")}</span>`;
+            chip.addEventListener("click", () => loadSubscriptionCreatorVideos(creator));
+            subscriptionCreatorStrip.appendChild(chip);
+
+            // Lazily fetch avatar if not yet available
+            if (!creator.avatarUrl) {
+                const endpoint = creator.userId
+                    ? `/api/creator/info?userId=${encodeURIComponent(creator.userId)}`
+                    : `/api/creator/by-name?name=${encodeURIComponent(creator.searchQuery || creator.name || "")}`;
+                fetch(endpoint)
+                    .then(r => r.ok ? r.json() : null)
+                    .then(info => {
+                        const av = info?.avatarUrl || info?.creatorAvatar || "";
+                        if (av) {
+                            creator.avatarUrl = av;
+                            if (info?.creatorId) creator.userId = info.creatorId;
+                            _applyChipAvatar(creator.searchQuery || creator.name || "", av, creator.name || "");
+                            // Persist updated avatar in localStorage cache
+                            const cached = lsGet(LS_SUB_CREATORS_KEY);
+                            if (cached) {
+                                const key = creator.searchQuery || creator.name || "";
+                                const idx = cached.findIndex(c => (c.searchQuery || c.name) === key);
+                                if (idx >= 0) { cached[idx].avatarUrl = av; lsSet(LS_SUB_CREATORS_KEY, cached); }
+                            }
+                        }
+                    })
+                    .catch(() => {});
+            }
+        });
+    }
+
+    async function loadSubscriptionCreatorVideos(creator) {
+        const creatorKey = creator.searchQuery || creator.name || "";
+        subscriptionCreatorStrip?.querySelectorAll(".sub-creator-chip").forEach(c => {
+            c.classList.toggle("active", c.dataset.searchQuery === creatorKey);
+        });
+        if (!profileSectionGrid) return;
+        profileSectionGrid.innerHTML = `<div class="empty-playlist">正在载入 ${escapeHtml(creator.name || "")} 的作品...</div>`;
+        try {
+            const category = creator.userId
+                ? `user:${creator.userId}`
+                : creator.searchQuery
+                    ? `query:${creator.searchQuery}`
+                    : null;
+            if (!category) {
+                profileSectionGrid.innerHTML = `<div class="empty-playlist">无法获取该作者作品</div>`;
+                return;
+            }
+            const resp = await fetch(`/api/browse?category=${encodeURIComponent(category)}&page=1`);
+            if (!resp.ok) throw new Error(await resp.text() || "载入失败");
+            const data = await resp.json();
+
+            // Update chip avatar if browse result has creator info
+            if (data.creatorAvatar && !creator.avatarUrl) {
+                creator.avatarUrl = data.creatorAvatar;
+                if (data.creatorId) creator.userId = data.creatorId;
+                _applyChipAvatar(creatorKey, data.creatorAvatar, creator.name || "");
+                // Persist updated creator list
+                const cached = lsGet(LS_SUB_CREATORS_KEY);
+                if (cached) {
+                    const idx = cached.findIndex(c => (c.searchQuery || c.name) === creatorKey);
+                    if (idx >= 0) {
+                        cached[idx].avatarUrl = data.creatorAvatar;
+                        if (data.creatorId) cached[idx].userId = data.creatorId;
+                        lsSet(LS_SUB_CREATORS_KEY, cached);
+                    }
+                }
+            }
+
+            profileSectionGrid.innerHTML = "";
+            profileSectionGrid.className = "profile-preview-row";
+            const items = data.videos || data.items || [];
+            if (!items.length) {
+                profileSectionGrid.innerHTML = `<div class="empty-playlist">暂无作品</div>`;
+                return;
+            }
+            items.forEach(item => {
+                const card = document.createElement("button");
+                card.className = "profile-preview-card";
+                card.type = "button";
+                card.innerHTML = `
+                    <img src="${imageUrl(item.thumbnail || item.cover || "")}" referrerpolicy="no-referrer" loading="lazy" alt="cover">
+                    <div>${escapeHtml(item.title || item.name || "未命名")}</div>
+                `;
+                card.addEventListener("click", () => {
+                    const target = item.url || item.pageUrl || item.link;
+                    if (target) loadParserUrl(target, true, true);
+                });
+                profileSectionGrid.appendChild(card);
+            });
+        } catch (err) {
+            profileSectionGrid.innerHTML = `<div class="empty-playlist">载入失败: ${escapeHtml(err.message)}</div>`;
+        }
+    }
+
+    function _applyChipAvatar(creatorKey, avatarUrl, name) {
+        if (!subscriptionCreatorStrip || !avatarUrl) return;
+        const chip = subscriptionCreatorStrip.querySelector(`[data-search-query="${CSS.escape(creatorKey)}"]`);
+        if (!chip || chip.querySelector(".sub-creator-chip-avatar")) return;
+        const initial = chip.querySelector(".sub-creator-chip-initial");
+        if (!initial) return;
+        const img = document.createElement("img");
+        img.className = "sub-creator-chip-avatar";
+        img.referrerPolicy = "no-referrer";
+        img.src = imageUrl(avatarUrl);
+        img.loading = "lazy";
+        img.alt = name;
+        img.onerror = () => { img.style.display = "none"; initial.style.display = "flex"; };
+        chip.insertBefore(img, initial);
+        initial.style.display = "none";
+    }
+
     function setDetailTab(tabName) {
         const activeTab = tabName === "comments" ? "comments" : "related";
         document.querySelectorAll("[data-detail-tab]").forEach((button) => {
@@ -1680,6 +2583,7 @@ document.addEventListener("DOMContentLoaded", () => {
         viewLanding.classList.add("hidden");
         viewBrowse.classList.add("hidden");
         viewParser.classList.add("hidden");
+        if (viewProfile) viewProfile.classList.add("hidden");
 
         document.getElementById(viewId).classList.remove("hidden");
         
@@ -1721,8 +2625,75 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             } else if (state.view === "viewParser" && state.url) {
                 loadParserUrl(state.url, false, true);
+            } else if (state.view === "viewProfile" && state.section) {
+                loadProfileSection(state.section, state.page || 1, false);
+            } else if (state.view === "viewProfile") {
+                loadProfileSummary(false);
             }
         }
+    }
+
+    function restoreInitialRouteFromHash() {
+        const hash = window.location.hash || "";
+        if (!hash || hash === "#") return false;
+
+        if (hash.startsWith("#parse?")) {
+            const params = new URLSearchParams(hash.slice("#parse?".length));
+            const url = params.get("v") || "";
+            if (!url) return false;
+            history.replaceState({ view: "viewParser", url }, "", hash);
+            loadParserUrl(url, false, true);
+            return true;
+        }
+
+        if (hash.startsWith("#search?")) {
+            const params = new URLSearchParams(hash.slice("#search?".length));
+            const page = parseInt(params.get("page") || "1", 10) || 1;
+            currentSearchState = normalizeSearchState({
+                query: params.get("query") || "",
+                type: params.get("type") || "",
+                genre: params.get("genre") || "",
+                sort: params.get("sort") || "",
+                date: params.get("date") || "",
+                duration: params.get("duration") || "",
+                tags: params.getAll("tags[]")
+            });
+            history.replaceState({ view: "viewBrowse", search: true, page, filters: currentSearchState }, "", hash);
+            loadSearchResults(page, false);
+            return true;
+        }
+
+        if (hash.startsWith("#profile-")) {
+            const match = hash.match(/^#profile-([a-z-]+)-(\d+)$/i);
+            if (match) {
+                const section = match[1];
+                const page = parseInt(match[2] || "1", 10) || 1;
+                history.replaceState({ view: "viewProfile", section, page }, "", hash);
+                loadProfileSection(section, page, false);
+                return true;
+            }
+        }
+
+        if (hash.startsWith("#browse-")) {
+            const body = hash.slice("#browse-".length);
+            const lastDash = body.lastIndexOf("-");
+            if (lastDash > 0) {
+                const category = decodeURIComponent(body.slice(0, lastDash));
+                const page = parseInt(body.slice(lastDash + 1) || "1", 10) || 1;
+                history.replaceState({ view: "viewBrowse", category, page }, "", hash);
+                loadBrowseCategory(category, page, false);
+                return true;
+            }
+        }
+
+        const viewId = hash.slice(1);
+        if (["viewLanding", "viewBrowse", "viewParser", "viewProfile"].includes(viewId)) {
+            history.replaceState({ view: viewId }, "", hash);
+            handleStateRestore({ view: viewId });
+            return true;
+        }
+
+        return false;
     }
 
     navLogo.addEventListener("click", () => switchView("viewLanding"));
@@ -1964,27 +2935,141 @@ document.addEventListener("DOMContentLoaded", () => {
         openHistoryTask(pageUrl);
     });
 
+    // ---- Login ----
+    const loginBtn = document.getElementById("loginBtn");
+    const loginModal = document.getElementById("loginModal");
+    const closeLoginBtn = document.getElementById("closeLoginBtn");
+    const closeLoginBtn2 = document.getElementById("closeLoginBtn2");
+    const submitLoginBtn = document.getElementById("submitLoginBtn");
+    const logoutBtn = document.getElementById("logoutBtn");
+    const loginForm = document.getElementById("loginForm");
+    const loggedInPanel = document.getElementById("loggedInPanel");
+    const loginError = document.getElementById("loginError");
+    const loginModalTitle = document.getElementById("loginModalTitle");
+
+    let isLoggedIn = false;
+
+    async function refreshLoginStatus() {
+        await refreshAuthState();
+        isLoggedIn = !!authState.loggedIn;
+        loginBtn.title = isLoggedIn ? "已登录（点击查看）" : "登录账号";
+        loginBtn.textContent = isLoggedIn ? "✅" : "👤";
+    }
+
+    function openLoginModal() {
+        loginError.style.display = "none";
+        loginError.textContent = "";
+        if (isLoggedIn) {
+            loginModalTitle.textContent = "✅ 已登录";
+            loginForm.style.display = "none";
+            loggedInPanel.style.display = "block";
+        } else {
+            loginModalTitle.textContent = "👤 登录账号";
+            loginForm.style.display = "block";
+            loggedInPanel.style.display = "none";
+        }
+        loginModal.classList.remove("hidden");
+    }
+
+    loginBtn.addEventListener("click", openLoginModal);
+    authUserBtn?.addEventListener("click", () => {
+        if (authState.loggedIn) {
+            loadProfileSummary(true);
+        } else {
+            openLoginModal();
+        }
+    });
+    closeLoginBtn.addEventListener("click", () => loginModal.classList.add("hidden"));
+    closeLoginBtn2.addEventListener("click", () => loginModal.classList.add("hidden"));
+    loginModal.addEventListener("click", (e) => { if (e.target === loginModal) loginModal.classList.add("hidden"); });
+
+    submitLoginBtn.addEventListener("click", async () => {
+        const email = document.getElementById("loginEmail").value.trim();
+        const password = document.getElementById("loginPassword").value;
+        if (!email || !password) {
+            loginError.textContent = "邮箱和密码不能为空";
+            loginError.style.display = "block";
+            return;
+        }
+        submitLoginBtn.disabled = true;
+        submitLoginBtn.textContent = "登录中…";
+        loginError.style.display = "none";
+        try {
+            const res = await fetch("/api/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, password }),
+            });
+            const text = await res.text();
+            if (res.ok) {
+                await refreshLoginStatus();
+                loginBtn.textContent = "✅";
+                loginBtn.title = "已登录（点击查看）";
+                loginModalTitle.textContent = "✅ 已登录";
+                loginForm.style.display = "none";
+                loggedInPanel.style.display = "block";
+            } else {
+                loginError.textContent = text || "登录失败，请检查账号和密码";
+                loginError.style.display = "block";
+            }
+        } catch (err) {
+            loginError.textContent = "网络错误：" + err.message;
+            loginError.style.display = "block";
+        } finally {
+            submitLoginBtn.disabled = false;
+            submitLoginBtn.textContent = "🔑 登录";
+        }
+    });
+
+    document.getElementById("loginPassword").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") submitLoginBtn.click();
+    });
+
+    logoutBtn.addEventListener("click", async () => {
+        logoutBtn.disabled = true;
+        try {
+            await fetch("/api/logout", { method: "POST" });
+            await fetch("/api/auth/logout", { method: "POST" });
+            authState = { loggedIn: false, username: "", avatarUrl: "", userId: "" };
+            isLoggedIn = false;
+            syncAuthHeader();
+            loginBtn.textContent = "👤";
+            loginBtn.title = "登录账号";
+            loginModal.classList.add("hidden");
+        } finally {
+            logoutBtn.disabled = false;
+        }
+    });
+
+    refreshLoginStatus();
+    restorePageCacheFromBackend();
+
+    // Auto-collapse log panel on startup
+    if (statusPanelWrapper) statusPanelWrapper.classList.add("collapsed");
+
+    profileBackBtn?.addEventListener("click", () => {
+        profileSectionDetail?.classList.add("hidden");
+        subscriptionCreatorStrip?.classList.add("hidden");
+        if (profilePaginationBar) profilePaginationBar.classList.remove("hidden");
+        profileSections?.classList.remove("hidden");
+        profilePageHeader?.classList.remove("hidden");
+    });
+    profilePrevPageBtn?.addEventListener("click", () => {
+        if (activeProfileSection && activeProfilePage > 1) {
+            loadProfileSection(activeProfileSection, activeProfilePage - 1, true);
+        }
+    });
+    profileNextPageBtn?.addEventListener("click", () => {
+        if (activeProfileSection && activeProfilePage < activeProfileTotalPages) {
+            loadProfileSection(activeProfileSection, activeProfilePage + 1, true);
+        }
+    });
+
     // ---- Settings API ----
     settingsBtn.addEventListener("click", async () => {
         settingsModal.classList.remove("hidden");
         updatePageCacheStatus();
-
-        // fetch available browsers dynamically
-        try {
-            const browserRes = await fetch("/api/browsers");
-            if (browserRes.ok) {
-                const browserData = await browserRes.json();
-                const choices = browserData.choices || [];
-                if (browserChannelSelect) {
-                    browserChannelSelect.innerHTML = choices.map(choice => {
-                        const label = choice.available ? choice.label : `${choice.label} (未检测到)`;
-                        return `<option value="${escapeHtml(choice.channel)}">${escapeHtml(label)}</option>`;
-                    }).join("");
-                }
-            }
-        } catch (e) {
-            console.error("Failed to load browsers list", e);
-        }
+        updateCookieStatus();
 
         // fetch current settings
         try {
@@ -2009,12 +3094,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (gopeedConnectionsInput) {
                 gopeedConnectionsInput.value = data.gopeedConnections || 16;
             }
-            if (browserChannelSelect) {
-                browserChannelSelect.value = data.browserChannel || "msedge";
+            if (maxLocalCacheSizeGBInput) {
+                maxLocalCacheSizeGBInput.value = data.maxLocalCacheSizeGB ?? 5;
             }
-            if (browserVerificationTimeoutSecondsInput) {
-                browserVerificationTimeoutSecondsInput.value = data.browserVerificationTimeoutSeconds || 180;
-            }
+            shortcutBack = normalizeShortcut(data.shortcutBack, "Alt+ArrowLeft");
+            shortcutForward = normalizeShortcut(data.shortcutForward, "Alt+ArrowRight");
+            if (shortcutBackInput) shortcutBackInput.value = shortcutBack;
+            if (shortcutForwardInput) shortcutForwardInput.value = shortcutForward;
         } catch (e) {
             console.error("Failed to load settings");
         }
@@ -2024,7 +3110,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const clearCacheBtn = document.getElementById('clearCacheBtn');
     if (clearCacheBtn) {
         clearCacheBtn.addEventListener('click', async () => {
-            if (!confirm('确定要清除浏览器本地缓存吗？这会强行关闭当前正在运行的抓取引擎（如果有的话），并清除所有验证记录。')) return;
+            if (!confirm('确定要清除本地缓存吗？这会清除页面缓存和 HTTP 抓取缓存，下载历史会保留。')) return;
             
             clearCacheBtn.disabled = true;
             clearCacheBtn.innerText = '🧹 正在清理...';
@@ -2032,7 +3118,7 @@ document.addEventListener("DOMContentLoaded", () => {
             try {
                 const res = await fetch('/api/settings/clear-cache', { method: 'POST' });
                 if (res.ok) {
-                    alert('本地缓存清理成功！抓取引擎已重置。');
+                    alert('本地缓存清理成功。');
                 } else {
                     const err = await res.text();
                     alert('清理失败: ' + err);
@@ -2046,11 +3132,23 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    const clearPageCacheBtn = document.getElementById("clearPageCacheBtn");
-    if (clearPageCacheBtn) {
-        clearPageCacheBtn.addEventListener("click", () => {
-            clearPageCache();
-            updatePageCacheStatus("页面缓存已清除");
+    const refreshCookieBtn = document.getElementById("refreshCookieBtn");
+    if (refreshCookieBtn) {
+        refreshCookieBtn.addEventListener("click", async () => {
+            refreshCookieBtn.disabled = true;
+            updateCookieStatus("正在打开浏览器抓取 Cookie...");
+            try {
+                const response = await fetch("/api/cookies/refresh", { method: "POST" });
+                if (!response.ok) {
+                    throw new Error(await response.text() || "Cookie 刷新失败");
+                }
+                const data = await response.json();
+                updateCookieStatus(data.valid ? "Cookie 已刷新并验证通过" : "Cookie 已刷新，但 HTTP 验证仍失败");
+            } catch (error) {
+                updateCookieStatus(`Cookie 刷新失败: ${error.message}`);
+            } finally {
+                refreshCookieBtn.disabled = false;
+            }
         });
     }
 
@@ -2130,12 +3228,13 @@ document.addEventListener("DOMContentLoaded", () => {
             return alert("Gopeed 最大连接数必须在 1 到 128 之间");
         }
 
-        const browserChannel = browserChannelSelect?.value || "msedge";
-
-        const browserVerificationTimeoutSeconds = Number.parseInt(browserVerificationTimeoutSecondsInput?.value || "180", 10);
-        if (!Number.isInteger(browserVerificationTimeoutSeconds) || browserVerificationTimeoutSeconds < 30 || browserVerificationTimeoutSeconds > 600) {
-            return alert("穿透超时时间必须在 30 到 600 秒之间");
+        const maxLocalCacheSizeGB = parseFloat(maxLocalCacheSizeGBInput?.value || "5");
+        if (isNaN(maxLocalCacheSizeGB) || maxLocalCacheSizeGB < 0.5 || maxLocalCacheSizeGB > 100) {
+            return alert("图片缓存上限必须在 0.5 到 100 GB 之间");
         }
+
+        const nextShortcutBack = normalizeShortcut(shortcutBackInput?.value, "Alt+ArrowLeft");
+        const nextShortcutForward = normalizeShortcut(shortcutForwardInput?.value, "Alt+ArrowRight");
 
         try {
             const res = await fetch("/api/settings", {
@@ -2149,12 +3248,15 @@ document.addEventListener("DOMContentLoaded", () => {
                     gopeedPort,
                     gopeedToken,
                     gopeedConnections,
-                    browserChannel,
-                    browserVerificationTimeoutSeconds
+                    maxLocalCacheSizeGB,
+                    shortcutBack: nextShortcutBack,
+                    shortcutForward: nextShortcutForward
                 })
             });
             if (res.ok) {
                 applyPageCacheLimit(pageCacheLimitValue);
+                shortcutBack = nextShortcutBack;
+                shortcutForward = nextShortcutForward;
                 alert("全局设置已保存！新的配置将立即生效。");
                 settingsModal.classList.add("hidden");
             } else {
@@ -2169,41 +3271,27 @@ document.addEventListener("DOMContentLoaded", () => {
     // ---- Video Player Logic ----
     playVideoBtn.addEventListener("click", () => {
         if (!currentVideoUrl) return;
-        currentVideoFallbackTried = false;
+        recordCurrentWatchHistory();
         
         // Hide Cover, Show Player
         coverWrapper.classList.add("hidden");
         playerWrapper.classList.remove("hidden");
         playerWrapper.classList.remove("preloading");
 
-        const fallbackToProxyVideo = () => {
-            if (currentVideoFallbackTried || !currentProxiedVideoUrl || currentVideoUrl === currentProxiedVideoUrl) return;
-            currentVideoFallbackTried = true;
-            currentVideoUrl = currentProxiedVideoUrl;
-            if(hlsInstance) {
-                hlsInstance.destroy();
-                hlsInstance = null;
-            }
-            videoPlayer.pause();
-            videoPlayer.removeAttribute("src");
-            videoPlayer.load();
-            if (currentVideoUrl.includes(".m3u8") && Hls.isSupported()) {
-                hlsInstance = new Hls();
-                hlsInstance.loadSource(currentVideoUrl);
-                hlsInstance.attachMedia(videoPlayer);
-                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
-                    videoPlayer.play();
-                });
-            } else {
-                videoPlayer.onerror = null;
-                videoPlayer.dataset.src = currentVideoUrl;
-                videoPlayer.src = currentVideoUrl;
-                const playPromise = videoPlayer.play();
-                if (playPromise) playPromise.catch(() => {});
-            }
-        };
-
         // Use HLS.js for m3u8, native HTML5 for mp4
+        videoPlayer.referrerPolicy = "no-referrer";
+        function showVideoError(msg) {
+            log(`❌ ${msg}，请尝试刷新页面或更换网络`, "error");
+            const existingErr = playerWrapper.querySelector(".video-error-overlay");
+            if (existingErr) existingErr.remove();
+            const overlay = document.createElement("div");
+            overlay.className = "video-error-overlay";
+            overlay.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.75);color:#fff;gap:12px;z-index:10";
+            overlay.innerHTML = `<span style="font-size:2rem">⚠️</span><span>${escapeHtml(msg)}</span>`;
+            playerWrapper.style.position = "relative";
+            playerWrapper.appendChild(overlay);
+        }
+
         if (currentVideoUrl.includes(".m3u8")) {
             if (Hls.isSupported()) {
                 if(hlsInstance) hlsInstance.destroy();
@@ -2214,17 +3302,26 @@ document.addEventListener("DOMContentLoaded", () => {
                     videoPlayer.play();
                 });
                 hlsInstance.on(Hls.Events.ERROR, function(_event, data) {
-                    if (data && data.fatal) fallbackToProxyVideo();
+                    if (data && data.fatal) {
+                        console.warn("直链 HLS 播放失败", data);
+                        hlsInstance.destroy();
+                        hlsInstance = null;
+                        showVideoError("HLS 流加载失败，链接可能已过期");
+                    }
                 });
             } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
                 // For Native Safari
+                videoPlayer.referrerPolicy = "no-referrer";
                 videoPlayer.src = currentVideoUrl;
                 videoPlayer.addEventListener('loadedmetadata', function() {
                     videoPlayer.play();
                 });
             }
         } else {
-            videoPlayer.onerror = fallbackToProxyVideo;
+            videoPlayer.onerror = () => {
+                console.warn("直链视频播放失败");
+                showVideoError("视频播放失败，链接可能已过期或受防盗链保护");
+            };
             videoPlayer.preload = "auto";
             if (videoPlayer.dataset.src !== currentVideoUrl || videoPlayer.error) {
                 videoPlayer.dataset.src = currentVideoUrl;
@@ -2232,7 +3329,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 videoPlayer.load();
             }
             const playPromise = videoPlayer.play();
-            if (playPromise) playPromise.catch(fallbackToProxyVideo);
+            if (playPromise) playPromise.catch((error) => console.warn("直链视频播放失败", error));
         }
     });
 
@@ -2270,11 +3367,10 @@ document.addEventListener("DOMContentLoaded", () => {
         currentVideoData = null;
         currentRawVideoUrl = "";
         currentVideoUrl = "";
-        currentProxiedVideoUrl = "";
-        currentVideoFallbackTried = false;
         delete videoPlayer.dataset.src;
         currentPlaylistItems = [];
         currentRelatedVideos = [];
+        updateVideoAccountActions();
         playlistCount.textContent = "0";
         playlistContainer.innerHTML = `<div class="empty-playlist">暂无影片序列</div>`;
         relatedVideoCount.textContent = "0";
@@ -2303,10 +3399,7 @@ document.addEventListener("DOMContentLoaded", () => {
         prepareParserLoading(normalizedUrl);
         window.scrollTo({ top: 0, behavior: "auto" });
 
-        log("初始化探针引力引擎...", "info");
-        log("调用本地代理规避侦测...", "info");
-        
-        scheduleCfModal();
+        log("初始化 HTTP 抓取请求...", "info");
 
         try {
             log(`目标源: ${normalizedUrl}`, "info");
@@ -2317,10 +3410,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 body: JSON.stringify({ url: normalizedUrl })
             });
 
-            hideCfModal();
-
             if (!response.ok) {
                 const errText = await response.text();
+                if (response.status === 503) showCookieBlockedBanner();
                 throw new Error(errText || "服务器探针断开");
             }
 
@@ -2332,7 +3424,6 @@ document.addEventListener("DOMContentLoaded", () => {
             window.scrollTo({ top: 0, behavior: "auto" });
 
         } catch (error) {
-            hideCfModal();
             log(`❌ 解析异常中断: ${error.message}`, "error");
         }
     }
@@ -2346,25 +3437,33 @@ document.addEventListener("DOMContentLoaded", () => {
         currentRawVideoUrl = data.videoUrl || "";
         mainTitle.textContent = data.title || "未知标题";
         currentVideoUrl = directMediaUrl(currentRawVideoUrl);
-        currentProxiedVideoUrl = proxyVideoUrl(currentRawVideoUrl);
         preloadCurrentVideo();
         
         // Handle Creator Info Card
         if (data.creator && data.creator.id && data.creator.name) {
             if (creatorName) creatorName.textContent = data.creator.name;
             if (creatorAvatar) {
-                creatorAvatar.dataset.srcRaw = data.creator.avatar || "";
-                creatorAvatar.dataset.proxyTried = "0";
-                creatorAvatar.onerror = () => fallbackImage(creatorAvatar);
-                creatorAvatar.src = data.creator.avatar 
-                    ? imageUrl(data.creator.avatar)
-                    : "https://via.placeholder.com/48x48.png?text=Avatar";
+                setDetailCreatorAvatar(data.creator.avatar || "");
+                const artistId = data.creator.post?.artistId || data.creator.id;
+                if (artistId) {
+                    fetch(`/api/creator/info?userId=${encodeURIComponent(artistId)}`)
+                        .then(r => r.ok ? r.json() : null)
+                        .then(info => {
+                            if (info?.avatarUrl && creatorAvatar) {
+                                setDetailCreatorAvatar(info.avatarUrl);
+                            }
+                        })
+                        .catch(() => {});
+                }
             }
             if (creatorInfoCard) {
                 creatorInfoCard.classList.remove("hidden");
                 creatorInfoCard.onclick = () => {
                     switchView("viewBrowse", false);
-                    loadBrowseCategory("user:" + data.creator.id, 1, true);
+                    // post.artistId is the real creator ID from the subscribe form;
+                    // creator.id is extracted from nav links and may be the logged-in user's ID
+                    const creatorId = data.creator.post?.artistId || data.creator.id;
+                    loadBrowseCategory("user:" + creatorId, 1, true);
                 };
             }
         } else {
@@ -2373,9 +3472,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Image Anti-Hotlink
         if (data.thumbnail) {
-            mainCover.dataset.srcRaw = data.thumbnail;
-            mainCover.dataset.proxyTried = "0";
-            mainCover.onerror = () => fallbackImage(mainCover);
+            mainCover.referrerPolicy = "no-referrer";
             mainCover.src = imageUrl(data.thumbnail);
         } else {
             mainCover.src = "https://via.placeholder.com/1280x720.png?text=No+Cover";
@@ -2402,7 +3499,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const el = document.createElement("div");
                 el.className = "playlist-item";
                 el.innerHTML = `
-                    <img src="${imageUrl(item.thumbnail)}" data-src-raw="${escapeHtml(item.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" class="item-thumb" alt="thumb">
+                    <img src="${imageUrl(item.thumbnail)}" referrerpolicy="no-referrer" loading="lazy" class="item-thumb" alt="thumb">
                     <div class="item-details">
                         <div class="item-title" title="${item.title}">${item.title}</div>
                     </div>
@@ -2422,7 +3519,92 @@ document.addEventListener("DOMContentLoaded", () => {
         renderRelatedVideoGrid(data.relatedVideos || []);
         setDetailTab("related");
         loadComments(data.videoId || "");
+        updateVideoAccountActions();
     }
+
+    favoriteVideoBtn?.addEventListener("click", async () => {
+        if (!currentVideoData || !requireLogin()) return;
+        favoriteVideoBtn.disabled = true;
+        try {
+            await postJson("/api/video/favorite", {
+                videoId: currentVideoData.videoId || videoIdFromUrl(urlInput.value),
+                csrfToken: currentVideoData.csrfToken,
+                currentUserId: currentVideoData.currentUserId,
+                isFav: !!currentVideoData.isFav
+            });
+            currentVideoData.isFav = !currentVideoData.isFav;
+            updateVideoAccountActions();
+        } catch (error) {
+            alert(`喜欢操作失败: ${error.message}`);
+        } finally {
+            favoriteVideoBtn.disabled = false;
+        }
+    });
+
+    watchLaterBtn?.addEventListener("click", async () => {
+        if (!currentVideoData || !requireLogin()) return;
+        const checked = !currentVideoData.myList?.isWatchLater;
+        watchLaterBtn.disabled = true;
+        try {
+            await postJson("/api/video/watch-later", {
+                videoId: currentVideoData.videoId || videoIdFromUrl(urlInput.value),
+                pageUrl: urlInput.value,
+                csrfToken: currentVideoData.csrfToken,
+                currentUserId: currentVideoData.currentUserId,
+                listCode: currentVideoData.myList?.watchLaterCode,
+                isChecked: checked
+            });
+            currentVideoData.myList = currentVideoData.myList || {};
+            currentVideoData.myList.isWatchLater = checked;
+            updateVideoAccountActions();
+        } catch (error) {
+            alert(`稍后观看操作失败: ${error.message}`);
+        } finally {
+            watchLaterBtn.disabled = false;
+        }
+    });
+
+    myListBtn?.addEventListener("click", async () => {
+        if (!currentVideoData || !requireLogin()) return;
+        const item = (currentVideoData.myList?.items || []).find(entry => !entry.isSelected) || (currentVideoData.myList?.items || [])[0];
+        if (!item?.code) return alert("未识别到可加入的播放清单");
+        myListBtn.disabled = true;
+        try {
+            await postJson("/api/video/my-list", {
+                videoId: currentVideoData.videoId || videoIdFromUrl(urlInput.value),
+                csrfToken: currentVideoData.csrfToken,
+                currentUserId: currentVideoData.currentUserId,
+                listCode: item.code,
+                isChecked: !item.isSelected
+            });
+            item.isSelected = !item.isSelected;
+        } catch (error) {
+            alert(`加入清单失败: ${error.message}`);
+        } finally {
+            updateVideoAccountActions();
+        }
+    });
+
+    subscribeCreatorBtn?.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        if (!currentVideoData?.creator?.post || !requireLogin()) return;
+        const post = currentVideoData.creator.post;
+        subscribeCreatorBtn.disabled = true;
+        try {
+            await postJson("/api/creator/subscribe", {
+                csrfToken: currentVideoData.csrfToken,
+                userId: post.userId,
+                artistId: post.artistId,
+                isSubscribed: !!post.isSubscribed
+            });
+            post.isSubscribed = !post.isSubscribed;
+            updateVideoAccountActions();
+        } catch (error) {
+            alert(`关注作者失败: ${error.message}`);
+        } finally {
+            subscribeCreatorBtn.disabled = false;
+        }
+    });
 
     startDownloadBtn.addEventListener("click", async () => {
         if (!currentRawVideoUrl && !urlInput.value.trim()) {
@@ -2468,11 +3650,58 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    document.addEventListener("keydown", (event) => {
+        if (isEditableTarget(event.target)) return;
+        const shortcut = shortcutFromEvent(event);
+        if (shortcut === shortcutBack) {
+            event.preventDefault();
+            history.back();
+        } else if (shortcut === shortcutForward) {
+            event.preventDefault();
+            history.forward();
+        }
+    });
+
+    function handleMouseHistoryNavigation(event) {
+        if (isEditableTarget(event.target)) return;
+        if (event.button === 3) {
+            event.preventDefault();
+            history.back();
+        } else if (event.button === 4) {
+            event.preventDefault();
+            history.forward();
+        }
+    }
+
+    document.addEventListener("mouseup", handleMouseHistoryNavigation);
+
     if (commentsList) {
         commentsList.addEventListener("click", (event) => {
+            const likeButton = event.target.closest(".comment-like-action[data-foreign-id]");
+            if (likeButton) {
+                toggleCommentLike(likeButton);
+                return;
+            }
+            const toggleButton = event.target.closest(".comment-reply-toggle-btn[data-comment-id]");
+            if (toggleButton) {
+                toggleCommentReplyForm(toggleButton.dataset.commentId);
+                return;
+            }
             const replyButton = event.target.closest(".comment-reply-btn[data-comment-id]");
             if (!replyButton) return;
             loadReplies(replyButton.dataset.commentId, replyButton);
+        });
+        commentsList.addEventListener("submit", (event) => {
+            const commentForm = event.target.closest("#videoCommentCreateForm");
+            if (commentForm) {
+                event.preventDefault();
+                submitVideoComment(commentForm);
+                return;
+            }
+            const form = event.target.closest(".comment-reply-create-form[data-reply-form-for]");
+            if (!form) return;
+            event.preventDefault();
+            submitCommentReply(form.dataset.replyFormFor, form);
         });
     }
 
@@ -2517,6 +3746,9 @@ document.addEventListener("DOMContentLoaded", () => {
             if (currentCreatorData) {
                 renderCreatorHeader(category);
             }
+        } else if (category.startsWith("query:")) {
+            title.innerText = `正在浏览: ${category.slice(6)}`;
+            categoryListItems.forEach(item => item.classList.remove("active"));
         } else if (category.startsWith("playlist:")) {
             title.innerText = "正在浏览: 播放清单";
             categoryListItems.forEach(item => item.classList.remove("active"));
@@ -2529,19 +3761,22 @@ document.addEventListener("DOMContentLoaded", () => {
             history.pushState({ view: 'viewBrowse', category: category, page: page }, "", `#browse-${encodeURIComponent(category)}-${page}`);
         }
 
-        grid.innerHTML = '';
-        loader.classList.remove('hidden');
+        // Check cache BEFORE clearing the grid to avoid visual flash
         if (restoreCachedBrowsePage(cacheKey)) {
             return;
         }
+
+        grid.innerHTML = '';
+        loader.classList.remove('hidden');
 
         try {
             const resp = await fetch(`/api/browse?category=${encodeURIComponent(category)}&page=${page}`);
             if (!resp.ok) {
                 const errText = await resp.text();
+                if (resp.status === 503) showCookieBlockedBanner();
                 throw new Error(errText || "无法获取该分类资源，可能被盾");
             }
-            
+
             const data = await resp.json();
             setPageCacheEntry(cacheKey, data);
             applyBrowseResult(data);
@@ -2658,5 +3893,6 @@ document.addEventListener("DOMContentLoaded", () => {
     fetchDownloadSnapshot();
     connectDownloadStream();
     window.addEventListener("resize", updatePlaylistPanelLayout);
+    restoreInitialRouteFromHash();
 
 });

@@ -9,10 +9,12 @@ Hanime Media Center 是一个本地运行的视频解析、浏览和下载管理
 - 分类、搜索、作者主页和播放清单浏览
 - 视频详情解析、在线播放地址探测、相关视频和评论展示
 - 评论回复、头像、点赞数和回复数解析
-- 页面缓存，支持设置缓存数量和清除页面缓存
+- 登录账号、个人主页、稍后观看、喜欢影片、播放清单、订阅和观看历史
+- 页面缓存、本地缓存清理和下载历史持久化
 - 下载队列、任务历史、暂停、恢复、取消和重试
 - Gopeed HTTP API 接力下载
-- Edge / Chrome / Chromium 自动检测，用于必要时完成人机验证
+- 图片和视频默认使用解析出的原始直链，并使用 `no-referrer` 策略避免本地 Referer 防盗链
+- Cookie 失效时可打开浏览器抓取并持久化 Cookie
 - 单 exe 打包运行，静态前端资源内置到程序中
 
 ## 直接运行源码
@@ -33,7 +35,7 @@ python -m pip install -r python_backend\requirements.txt
 ### 启动
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File run-python-backend.ps1
+python python_backend\run.py
 ```
 
 默认地址：
@@ -45,35 +47,31 @@ http://127.0.0.1:58080/
 指定数据目录：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File run-python-backend.ps1 -AppHome "D:\HanimeData"
+python python_backend\run.py --app-home "D:\HanimeData"
 ```
 
 ## 打包为单 exe
 
-项目提供了 Windows 一键打包脚本：
+安装运行依赖和 PyInstaller 后打包：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build-windows-onefile.ps1
+python -m pip install -r python_backend\requirements.txt
+python -m pip install pyinstaller
+pyinstaller --clean --noconfirm HanimeMediaCenter.spec
 ```
 
-脚本会执行：
+打包命令会执行：
 
-- 安装/确认 Python 依赖和 PyInstaller
-- 编译检查 Python 文件
-- 检查前端 `app.js` 语法
 - 使用 `HanimeMediaCenter.spec` 打包
 - 输出单文件程序到 `dist\HanimeMediaCenter.exe`
 
-如果不想在打包前运行测试：
+打包前建议先验证：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build-windows-onefile.ps1 -SkipTests
-```
-
-清理旧构建并重新打包：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File build-windows-onefile.ps1 -Clean
+python -m pip install -r python_backend\requirements-dev.txt
+python -m pytest python_backend\tests -q
+python -m compileall -q python_backend
+node --check src\main\resources\static\app.js
 ```
 
 ## 运行 exe
@@ -108,9 +106,9 @@ http://127.0.0.1:58080/
 
 常见文件：
 
-- `settings.json`：下载目录、Gopeed、浏览器和页面缓存设置
-- `download-history.json`：下载历史
-- `.playwright_data\`：浏览器验证会话数据
+- `settings.json`：下载目录、Gopeed、快捷键和页面缓存设置
+- `hanime_media_center.db`：页面缓存、下载历史和观看历史等本地持久化数据
+- `cf_cookies.json`：HTTP 请求复用的 Cookie 缓存
 
 这些数据不会打进 exe，便于升级程序时保留设置和历史。
 
@@ -129,13 +127,11 @@ http://127.0.0.1:58080/
 ## 验证命令
 
 ```powershell
-python -m pytest python_backend/tests -v
+python -m pip install -r python_backend\requirements-dev.txt
+python -m pytest python_backend\tests -q
 python -m compileall -q python_backend
 node --check src\main\resources\static\app.js
-python python_backend\smoke.py
 ```
-
-`smoke.py` 会启动本地测试服务并验证主要 API 是否可用。
 
 ## 项目结构
 
@@ -143,15 +139,17 @@ python python_backend\smoke.py
 python_backend/
 ├── app/
 │   ├── main.py          # FastAPI 应用和 API 路由
-│   ├── scraper.py       # HTTP 抓取和 Playwright 验证兜底
+│   ├── scraper.py       # HTTP 抓取、登录 Cookie 和数据接口请求
 │   ├── parser.py        # 页面、评论、回复和视频信息解析
 │   ├── downloads.py     # 下载队列、SSE 和 Gopeed API
+│   ├── local_db.py      # SQLite 本地持久化
+│   ├── cookie_refresh.py # 浏览器抓取 Cookie
 │   ├── settings.py      # 用户设置和本地数据路径
-│   ├── browsers.py      # 本机浏览器检测
 │   └── paths.py         # 源码/打包后的静态资源定位
 ├── desktop.py           # exe 桌面启动入口
 ├── run.py               # 源码服务启动入口
-├── requirements.txt     # Python 依赖
+├── requirements.txt     # 运行依赖
+├── requirements-dev.txt # 开发和测试依赖
 └── tests/               # 自动化测试
 
 src/main/resources/static/
@@ -160,7 +158,7 @@ src/main/resources/static/
 └── style.css
 
 HanimeMediaCenter.spec       # PyInstaller 配置
-build-windows-onefile.ps1    # Windows 单 exe 打包脚本
+dist/HanimeMediaCenter.exe   # 打包后的单文件程序
 ```
 
 ## 常见问题
@@ -181,9 +179,13 @@ http://127.0.0.1:58080/
 .\dist\HanimeMediaCenter.exe --port 58081
 ```
 
-### Cloudflare 或人机验证失败
+### HTTP 请求被 Cloudflare 拦截
 
-在设置里切换浏览器通道，例如 Edge、Chrome 或 Chromium。验证浏览器需要本机已安装，并且不要在验证过程中关闭弹出的浏览器窗口。
+在设置中点击刷新 Cookie。程序会打开浏览器访问站点，抓取可用 Cookie 后保存到本地；之后所有站点请求都会带上 Cookie。
+
+### 图片或视频直链无法加载
+
+程序会在页面级设置 `Referrer-Policy: no-referrer`，避免本地地址作为 Referer 触发防盗链。若仍无法播放，通常是远端链接过期、网络不可达或站点策略变化。
 
 ### 下载任务创建失败
 
@@ -191,7 +193,7 @@ http://127.0.0.1:58080/
 
 ### exe 体积较大
 
-这是单文件打包的正常现象。程序包含 Python 运行时、后端依赖和前端静态资源，但不内置 Edge/Chrome 浏览器本体。
+这是单文件打包的正常现象。程序包含 Python 运行时、后端依赖、Playwright Cookie 抓取支持和前端静态资源。
 
 ## 免责声明
 

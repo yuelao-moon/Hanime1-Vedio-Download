@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .browsers import normalize_browser_channel
+from .local_db import LocalStore
 
 
 @dataclass
@@ -15,9 +15,10 @@ class AppSettings:
     gopeedPort: int = 9999
     gopeedToken: str = ""
     gopeedConnections: int = 16
-    browserChannel: str = "msedge"
-    browserVerificationTimeoutSeconds: int = 180
     pageCacheLimit: int = 20
+    maxLocalCacheSizeGB: float = 5.0
+    shortcutBack: str = "Alt+ArrowLeft"
+    shortcutForward: str = "Alt+ArrowRight"
 
     def __post_init__(self) -> None:
         if not self.downloadDirectory:
@@ -27,9 +28,10 @@ class AppSettings:
         self.gopeedConnections = clamp(self.gopeedConnections, 1, 128, 16)
         self.gopeedHost = (self.gopeedHost or "127.0.0.1").strip() or "127.0.0.1"
         self.gopeedToken = (self.gopeedToken or "").strip()
-        self.browserChannel = normalize_browser_channel(self.browserChannel)
-        self.browserVerificationTimeoutSeconds = clamp(self.browserVerificationTimeoutSeconds, 30, 600, 180)
         self.pageCacheLimit = clamp(self.pageCacheLimit, 1, 200, 20)
+        self.maxLocalCacheSizeGB = clamp_float(self.maxLocalCacheSizeGB, 0.5, 100.0, 5.0)
+        self.shortcutBack = normalize_shortcut(self.shortcutBack, "Alt+ArrowLeft")
+        self.shortcutForward = normalize_shortcut(self.shortcutForward, "Alt+ArrowRight")
 
     @classmethod
     def from_dict(cls, value: dict) -> "AppSettings":
@@ -40,9 +42,10 @@ class AppSettings:
             gopeedPort=value.get("gopeedPort", 9999),
             gopeedToken=value.get("gopeedToken", ""),
             gopeedConnections=value.get("gopeedConnections", 16),
-            browserChannel=value.get("browserChannel", "msedge"),
-            browserVerificationTimeoutSeconds=value.get("browserVerificationTimeoutSeconds", 180),
             pageCacheLimit=value.get("pageCacheLimit", 20),
+            maxLocalCacheSizeGB=value.get("maxLocalCacheSizeGB", 5.0),
+            shortcutBack=value.get("shortcutBack", "Alt+ArrowLeft"),
+            shortcutForward=value.get("shortcutForward", "Alt+ArrowRight"),
         )
 
     def to_dict(self) -> dict:
@@ -55,6 +58,7 @@ class SettingsStore:
         self.home.mkdir(parents=True, exist_ok=True)
         self.settings_file = self.home / "settings.json"
         self.history_file = self.home / "download-history.json"
+        self.local_store = LocalStore(self.home)
 
     def load(self) -> AppSettings:
         if self.settings_file.exists():
@@ -71,16 +75,22 @@ class SettingsStore:
         self.settings_file.write_text(json.dumps(settings.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def load_history(self) -> list[dict]:
+        stored = self.local_store.load_download_history()
+        if stored:
+            return stored
         if not self.history_file.exists():
             return []
         try:
             value = json.loads(self.history_file.read_text(encoding="utf-8"))
-            return value if isinstance(value, list) else []
+            history = value if isinstance(value, list) else []
+            if history:
+                self.local_store.save_download_history(history)
+            return history
         except json.JSONDecodeError:
             return []
 
     def save_history(self, history: list[dict]) -> None:
-        self.history_file.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.local_store.save_download_history(history)
 
 
 def clamp(value: int, minimum: int, maximum: int, fallback: int) -> int:
@@ -91,3 +101,16 @@ def clamp(value: int, minimum: int, maximum: int, fallback: int) -> int:
     if parsed < minimum or parsed > maximum:
         return fallback if parsed < minimum or parsed > maximum and maximum == 65535 else min(max(parsed, minimum), maximum)
     return parsed
+
+
+def clamp_float(value: float, minimum: float, maximum: float, fallback: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(max(parsed, minimum), maximum)
+
+
+def normalize_shortcut(value: str, fallback: str) -> str:
+    value = str(value or "").strip()
+    return value if value else fallback

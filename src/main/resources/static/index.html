@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
     <title>Hanime Media Center</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=3.3">
+    <link rel="stylesheet" href="style.css?v=3.8">
     <!-- Include HLS.js for streaming m3u8 videos -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
@@ -42,7 +43,13 @@
                 <span>下载中心</span>
                 <span class="nav-pill" id="downloadBadge">0</span>
             </button>
-            <button class="icon-btn" id="settingsBtn" title="全局设置">⚙️</button>
+            <button class="account-nav-btn" id="authUserBtn" title="登录账号">
+                <img class="account-avatar" id="authAvatar" alt="avatar" src="">
+                <span class="account-name" id="authName">未登录</span>
+                <span class="account-hint" id="authHint">登录</span>
+            </button>
+            <button class="icon-btn login-status-btn hidden" id="loginBtn" title="登录账号">👤</button>
+        <button class="icon-btn" id="settingsBtn" title="全局设置">⚙️</button>
         </div>
     </header>
 
@@ -153,7 +160,7 @@
                     <!-- Spinner for fetching categories -->
                     <div id="browseLoader" class="loader-container hidden">
                         <div class="loader"></div>
-                        <p>正在后台驱动浏览器穿透盾牌抓取数据，请耐心等待...</p>
+                        <p>正在通过 HTTP 请求抓取数据，请耐心等待...</p>
                     </div>
                     <div class="video-grid" id="videoGrid">
                         <!-- Filled by JS -->
@@ -166,6 +173,26 @@
                         <button id="nextPageBtn" class="btn-secondary" title="下一页">→</button>
                     </div>
                 </main>
+            </div>
+        </section>
+
+        <section id="viewProfile" class="view-section hidden">
+            <div class="profile-page">
+                <div class="profile-page-header" id="profilePageHeader"></div>
+                <div class="profile-sections" id="profileSections"></div>
+                <div class="profile-section-detail hidden" id="profileSectionDetail">
+                    <div class="profile-section-title-row">
+                        <button class="btn-secondary" id="profileBackBtn" type="button">返回</button>
+                        <h2 id="profileSectionTitle">个人内容</h2>
+                    </div>
+                    <div class="subscription-creator-strip hidden" id="subscriptionCreatorStrip"></div>
+                    <div class="profile-preview-row" id="profileSectionGrid"></div>
+                    <div class="action-bar" id="profilePaginationBar" style="justify-content:center;margin-top:1rem;">
+                        <button class="btn-secondary" id="profilePrevPageBtn" type="button">上一页</button>
+                        <span id="profilePageIndicator" style="color:var(--text-muted);"></span>
+                        <button class="btn-secondary" id="profileNextPageBtn" type="button">下一页</button>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -225,9 +252,13 @@
                                     </div>
                                     <div class="creator-sub">点击查看作者的所有视频</div>
                                 </div>
+                                <button class="btn-secondary creator-subscribe-btn hidden" id="subscribeCreatorBtn" type="button">关注</button>
                             </div>
                             
                             <div class="action-bar">
+                                <button class="btn-secondary" id="favoriteVideoBtn" type="button">喜欢</button>
+                                <button class="btn-secondary" id="watchLaterBtn" type="button">稍后观看</button>
+                                <button class="btn-secondary" id="myListBtn" type="button">加入清单</button>
                                 <button class="btn-download" id="startDownloadBtn">
                                     <span class="icon">⬇️</span> 极速接力下载
                                 </button>
@@ -289,12 +320,34 @@
     </div>
 
     <!-- Modals -->
-    <!-- CF Challenge Modal -->
-    <div class="modal hidden" id="cfModal">
-        <div class="modal-content">
-            <h2>🛡️ 正在打破 CF 壁垒</h2>
-            <p>若弹出浏览器及音频提示，请在视窗中<b>手动完成人机验证</b>。<br>完成后此窗口将自动关闭并继续流程。</p>
-            <div class="loader" style="margin:2rem auto 0;"></div>
+    <!-- Login Modal -->
+    <div class="modal hidden" id="loginModal">
+        <div class="modal-content text-left" style="width: 420px;">
+            <h2 style="margin-bottom: 1.5rem;" id="loginModalTitle">👤 登录账号</h2>
+
+            <div id="loginForm">
+                <div class="form-group">
+                    <label for="loginEmail">邮箱 / Email</label>
+                    <input type="email" id="loginEmail" placeholder="请输入邮箱地址" style="width:100%;">
+                </div>
+                <div class="form-group" style="margin-top:1rem;">
+                    <label for="loginPassword">密码</label>
+                    <input type="password" id="loginPassword" placeholder="请输入密码" style="width:100%;">
+                </div>
+                <p id="loginError" style="color:#ff6b6b;font-size:0.9rem;margin-top:0.8rem;display:none;"></p>
+                <div class="action-bar" style="justify-content:flex-end;margin-top:1.5rem;margin-bottom:0;">
+                    <button class="btn-secondary" id="closeLoginBtn">取消</button>
+                    <button class="btn-primary" id="submitLoginBtn" style="margin-left:0.8rem;">🔑 登录</button>
+                </div>
+            </div>
+
+            <div id="loggedInPanel" style="display:none;">
+                <p style="color:var(--text-muted);margin-bottom:1.5rem;">当前已登录 hanime1.me 账号，所有请求将携带登录 Cookie。</p>
+                <div class="action-bar" style="justify-content:flex-end;margin-bottom:0;">
+                    <button class="btn-secondary" id="closeLoginBtn2">关闭</button>
+                    <button class="btn-secondary" id="logoutBtn" style="margin-left:0.8rem;background:rgba(255,100,100,0.1);border-color:rgba(255,100,100,0.3);color:#ff6b6b;">登出</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -324,24 +377,25 @@
 
             <div class="settings-grid-2">
                 <div class="form-group">
-                    <label for="browserVerificationTimeoutSeconds">人机验证超时 (秒)</label>
-                    <input type="number" id="browserVerificationTimeoutSeconds" min="30" max="600" step="1" placeholder="180">
-                    <small class="help-text">默认 180，最大 600。</small>
+                    <label for="gopeedConnections">Gopeed 最大连接数</label>
+                    <input type="number" id="gopeedConnections" min="1" max="128" step="1" placeholder="16">
+                    <small class="help-text">默认 16，最大 128。</small>
+                </div>
+                <div class="form-group">
+                    <label for="maxLocalCacheSizeGB">图片缓存上限 (GB)</label>
+                    <input type="number" id="maxLocalCacheSizeGB" min="0.5" max="100" step="0.5" placeholder="5">
+                    <small class="help-text">默认 5 GB，缓存封面图片到本地加速加载。</small>
                 </div>
             </div>
 
             <div class="settings-grid-2">
                 <div class="form-group">
-                    <label for="browserChannel">人机验证过盾浏览器</label>
-                    <select id="browserChannel">
-                        <!-- Populated by JavaScript -->
-                    </select>
-                    <small class="help-text">选择 Cloudflare 验证所用浏览器。</small>
+                    <label for="shortcutBack">快捷返回</label>
+                    <input type="text" id="shortcutBack" placeholder="Alt+ArrowLeft">
                 </div>
                 <div class="form-group">
-                    <label for="gopeedConnections">Gopeed 最大连接数</label>
-                    <input type="number" id="gopeedConnections" min="1" max="128" step="1" placeholder="16">
-                    <small class="help-text">默认 16，最大 128。</small>
+                    <label for="shortcutForward">快捷前进</label>
+                    <input type="text" id="shortcutForward" placeholder="Alt+ArrowRight">
                 </div>
             </div>
 
@@ -366,13 +420,14 @@
                 <span id="updateResult" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
             </div>
 
+
             <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
-                <button class="btn-secondary" id="clearPageCacheBtn" title="清除分类和搜索页面缓存" style="border-color: rgba(100, 200, 255, 0.3); color: #6bc5ff;">清除页面缓存</button>
-                <span id="pageCacheStatus" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
+                <button class="btn-secondary" id="refreshCookieBtn" title="打开浏览器刷新 cf_clearance Cookie" style="border-color: rgba(100, 200, 255, 0.3); color: #6bc5ff;">刷新 Cookie</button>
+                <span id="cookieStatus" style="display:inline; margin-left:0.8rem; font-size:0.9rem; color:var(--text-muted);"></span>
             </div>
 
             <div class="action-bar" style="justify-content: space-between; margin-top: 1.5rem; margin-bottom: 0;">
-                <button class="btn-secondary" id="clearCacheBtn" title="清除浏览器记忆并重启抓取引擎" style="background: rgba(255, 100, 100, 0.1); border-color: rgba(255, 100, 100, 0.3); color: #ff6b6b;">🧹 清除本地缓存</button>
+                <button class="btn-secondary" id="clearCacheBtn" title="清除本地页面缓存和抓取缓存" style="background: rgba(255, 100, 100, 0.1); border-color: rgba(255, 100, 100, 0.3); color: #ff6b6b;">🧹 清除本地缓存</button>
                 <div style="display: flex; gap: 10px;">
                     <button class="btn-secondary" id="closeSettingsBtn">取消</button>
                     <button class="btn-primary" id="saveSettingsBtn">💾 保存设定</button>
@@ -467,6 +522,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=3.3"></script>
+    <script src="app.js?v=3.8"></script>
 </body>
 </html>
