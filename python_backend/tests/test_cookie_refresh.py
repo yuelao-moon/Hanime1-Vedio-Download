@@ -117,3 +117,52 @@ async def test_browser_cookie_collector_waits_after_cloudflare_navigation_timeou
     assert context.cookie_calls >= 2
     assert context.closed is True
     assert fake_playwright.stopped is True
+
+
+class AlwaysCookieContext:
+    def __init__(self):
+        self.pages = [TimeoutPage()]
+        self.cookie_calls = 0
+        self.closed = False
+
+    async def cookies(self, origin: str):
+        self.cookie_calls += 1
+        return [{"name": "cf_clearance", "value": "ok", "domain": ".hanime1.me", "path": "/"}]
+
+    async def close(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_browser_cookie_collector_keeps_browser_open_until_http_validation_passes(tmp_path, monkeypatch):
+    context = AlwaysCookieContext()
+    collector = BrowserCookieCollector(tmp_path)
+    fake_playwright = FakePlaywright(context)
+    validate_calls = 0
+    reload_calls = 0
+
+    class Starter:
+        async def start(self):
+            return fake_playwright
+
+    def fake_async_playwright():
+        return Starter()
+
+    async def validate():
+        nonlocal validate_calls
+        validate_calls += 1
+        return validate_calls >= 3
+
+    def reload_session():
+        nonlocal reload_calls
+        reload_calls += 1
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", fake_async_playwright)
+
+    result = await collector.refresh(validate=validate, reload_session=reload_session, timeout_seconds=5)
+
+    assert result["ok"] is True
+    assert result["valid"] is True
+    assert validate_calls == 3
+    assert reload_calls >= 3
+    assert context.closed is True
