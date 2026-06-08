@@ -301,25 +301,32 @@ class HanimeScraper:
         cached = self._get_cached_html(url, referer)
         if cached is not None:
             return cached
+        max_attempts = 3
         last_error: Exception | None = None
-        if not self._should_skip_http(url):
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                await asyncio.sleep(2)
+            if self._should_skip_http(url):
+                last_error = SessionBlockedError("HTTP 请求暂时被阻断，请刷新 Cookie 后重试")
+                continue
             try:
                 response = await self._request_http("GET", url, headers=referer_header(referer))
                 if usable_response(response) and looks_like_hanime_content(response.text) and not looks_like_blocked_page(response.text):
                     self._set_cached_html(url, referer, response.text)
                     return response.text
-                if response.status_code in {401, 403, 429}:
+                if response.status_code == 429:
+                    # 限流才封锁域名，401/403 是认证问题不应阻断后续请求
                     self._mark_http_blocked(url)
                 if looks_like_blocked_page(response.text):
                     raise SessionBlockedError("HTTP 请求被 Cloudflare 拦截，请先刷新可用 Cookie 后重试")
-                raise SessionBlockedError(f"HTTP 请求失败（HTTP {response.status_code}）")
+                last_error = SessionBlockedError(f"HTTP 请求失败（HTTP {response.status_code}）")
             except SessionBlockedError:
                 raise
             except Exception as exc:
                 last_error = exc
         if last_error:
-            raise SessionBlockedError(f"HTTP 请求失败: {last_error}") from last_error
-        raise SessionBlockedError("HTTP 请求暂时被阻断，请刷新 Cookie 后重试")
+            raise last_error if isinstance(last_error, SessionBlockedError) else SessionBlockedError(f"HTTP 请求失败: {last_error}") from last_error
+        raise SessionBlockedError("HTTP 请求失败")
 
     async def fetch_json(self, url: str, referer: str = "") -> dict:
         headers = referer_header(referer)
@@ -606,9 +613,16 @@ class HanimeScraper:
     async def validate_cookie_session(self) -> bool:
         try:
             response = await self._request_http("GET", "https://hanime1.me/", headers=referer_header("https://hanime1.me/"))
-            return usable_response(response) and looks_like_hanime_content(response.text) and not looks_like_blocked_page(response.text)
-        except Exception:
-            return False
+            if response.status_code in {401, 403}:
+                return False
+            if looks_like_blocked_page(response.text):
+                return False
+            return usable_response(response) and looks_like_hanime_content(response.text)
+        except Exception as exc:
+            # 网络错误不代表 cookie 失效，保守地认为仍然有效，避免不必要的浏览器刷新
+            import logging
+            logging.getLogger(__name__).debug("Cookie 验证请求失败（按有效处理）: %s", exc)
+            return True
 
     async def close(self) -> None:
         if self._owns_client:
@@ -764,6 +778,12 @@ def looks_like_hanime_content(html: str) -> bool:
             "related-tabcontent",
             "loadcomment",
             "hanime1.me",
+            # 个人主页相关页面
+            "user-profile",
+            "profile-header",
+            "/user/",
+            "subscriptions",
+            "watch-later",
         )
     )
 

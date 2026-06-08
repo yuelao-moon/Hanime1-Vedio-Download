@@ -11,9 +11,6 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 _COOKIE_FILE = "cf_cookies.json"
-# Re-use cached cookies up to this age (seconds). cf_clearance usually lasts
-# ~24 h; we refresh early to avoid mid-session expiry.
-_CACHE_MAX_AGE = 20 * 3600  # 20 hours
 
 
 def save_cookies(cookies: list[dict], home: Path, user_agent: str | None = None) -> None:
@@ -46,27 +43,24 @@ def load_cookie_cache(home: Path) -> dict:
 def load_cookies(home: Path) -> list[dict]:
     """
     Load cookies from the on-disk cache.
-    Returns an empty list if the cache is missing, too old, or has no cf_clearance.
+    Returns valid (non-expired) cookies, or empty list if cache is missing.
+    Relies on individual cookie `expires` timestamps rather than a hard file-age limit.
     """
     path = home / _COOKIE_FILE
     if not path.exists():
         return []
     try:
         data = load_cookie_cache(home)
-        saved_at = data.get("saved_at", 0)
-        if time.time() - saved_at > _CACHE_MAX_AGE:
-            log.debug("Cookie 缓存已超过 %dh，将重新获取", _CACHE_MAX_AGE // 3600)
-            return []
         cookies = data.get("cookies", [])
         now = time.time()
-        # Filter out expired cookies stored as Unix timestamps.
+        # Filter out cookies with a past expiry; keep session cookies (expires == -1 or 0).
         valid = [c for c in cookies
                  if not c.get("expires") or c["expires"] == -1 or c["expires"] > now]
         cf_count = sum(1 for c in valid if c.get("name") == "cf_clearance")
         if cf_count == 0:
-            log.debug("Cookie 缓存中没有有效的 cf_clearance")
-            return []
-        log.debug("从缓存加载了 %d 个 cookies（cf_clearance: %d）", len(valid), cf_count)
+            log.debug("Cookie 缓存中没有有效的 cf_clearance（共 %d 个有效 cookies）", len(valid))
+        else:
+            log.debug("从缓存加载了 %d 个 cookies（cf_clearance: %d）", len(valid), cf_count)
         return valid
     except Exception as exc:
         log.debug("读取 cookie 缓存失败: %s", exc)

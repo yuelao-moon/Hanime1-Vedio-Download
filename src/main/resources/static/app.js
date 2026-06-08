@@ -1426,8 +1426,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         downloadCenterModal.classList.add("hidden");
         urlInput.value = pageUrl;
-        switchView("viewParser", true);
-        parseBtn.click();
+        // Don't push state via switchView — let loadParserUrl push the canonical state with URL
+        switchView("viewParser", false);
+        loadParserUrl(pageUrl, true, true);
     }
 
     function bindHistoryCardInteractions() {
@@ -2267,50 +2268,59 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadProfileSectionPreview(section, container) {
         container.innerHTML = `<div class="empty-playlist">正在载入...</div>`;
-        try {
-            const response = await fetch(`/api/profile/section/${section}?page=1`);
-            if (!response.ok) throw new Error("加载失败");
-            const data = await response.json();
-            container.innerHTML = "";
-            const items = (data.items || []).slice(0, 6);
-            if (items.length === 0) {
-                container.innerHTML = `<div class="empty-playlist">暂无内容</div>`;
-            } else {
-                items.forEach(item => container.appendChild(createProfileItemCard(item)));
-                // Lazy-fetch real avatars for subscription creators
-                if (section === "subscriptions") {
-                    items.filter(item => item.isCreator && !item.avatarUrl).forEach(item => {
-                        const key = item.searchQuery || item.name || "";
-                        if (!key) return;
-                        const ep = item.userId
-                            ? `/api/creator/info?userId=${encodeURIComponent(item.userId)}`
-                            : `/api/creator/by-name?name=${encodeURIComponent(key)}`;
-                        fetch(ep).then(r => r.ok ? r.json() : null).then(info => {
-                            const av = info?.avatarUrl || info?.creatorAvatar || "";
-                            if (!av) return;
-                            const cardEl = container.querySelector(`[data-creator-key="${CSS.escape(key)}"]`);
-                            if (cardEl && !cardEl.querySelector(".creator-avatar-img")) {
-                                const wrap = cardEl.querySelector(".creator-avatar-wrap");
-                                const initEl = cardEl.querySelector(".creator-avatar-initial");
-                                if (wrap && initEl) {
-                                    const img = document.createElement("img");
-                                    img.className = "creator-avatar-img";
-                                    img.referrerPolicy = "no-referrer";
-                                    img.src = imageUrl(av);
-                                    img.loading = "lazy";
-                                    img.alt = item.name || "";
-                                    img.onerror = function() { this.style.display = "none"; initEl.style.display = "flex"; };
-                                    initEl.style.display = "none";
-                                    wrap.insertBefore(img, initEl);
-                                }
-                            }
-                        }).catch(() => {});
-                    });
+        let lastError = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                if (attempt > 1) {
+                    container.innerHTML = `<div class="empty-playlist">正在重试（${attempt}/3）...</div>`;
+                    await new Promise(r => setTimeout(r, 2000));
                 }
+                const response = await fetch(`/api/profile/section/${section}?page=1`);
+                if (!response.ok) throw new Error("加载失败");
+                const data = await response.json();
+                container.innerHTML = "";
+                const items = (data.items || []).slice(0, 6);
+                if (items.length === 0) {
+                    container.innerHTML = `<div class="empty-playlist">暂无内容</div>`;
+                } else {
+                    items.forEach(item => container.appendChild(createProfileItemCard(item)));
+                    // Lazy-fetch real avatars for subscription creators
+                    if (section === "subscriptions") {
+                        items.filter(item => item.isCreator && !item.avatarUrl).forEach(item => {
+                            const key = item.searchQuery || item.name || "";
+                            if (!key) return;
+                            const ep = item.userId
+                                ? `/api/creator/info?userId=${encodeURIComponent(item.userId)}`
+                                : `/api/creator/by-name?name=${encodeURIComponent(key)}`;
+                            fetch(ep).then(r => r.ok ? r.json() : null).then(info => {
+                                const av = info?.avatarUrl || info?.creatorAvatar || "";
+                                if (!av) return;
+                                const cardEl = container.querySelector(`[data-creator-key="${CSS.escape(key)}"]`);
+                                if (cardEl && !cardEl.querySelector(".creator-avatar-img")) {
+                                    const wrap = cardEl.querySelector(".creator-avatar-wrap");
+                                    const initEl = cardEl.querySelector(".creator-avatar-initial");
+                                    if (wrap && initEl) {
+                                        const img = document.createElement("img");
+                                        img.className = "creator-avatar-img";
+                                        img.referrerPolicy = "no-referrer";
+                                        img.src = imageUrl(av);
+                                        img.loading = "lazy";
+                                        img.alt = item.name || "";
+                                        img.onerror = function() { this.style.display = "none"; initEl.style.display = "flex"; };
+                                        initEl.style.display = "none";
+                                        wrap.insertBefore(img, initEl);
+                                    }
+                                }
+                            }).catch(() => {});
+                        });
+                    }
+                }
+                return;
+            } catch (error) {
+                lastError = error;
             }
-        } catch (error) {
-            container.innerHTML = `<div class="empty-playlist">加载失败: ${escapeHtml(error.message)}</div>`;
         }
+        container.innerHTML = `<div class="empty-playlist">加载失败: ${escapeHtml(lastError?.message || "未知错误")}</div>`;
     }
 
 
@@ -2331,18 +2341,28 @@ document.addEventListener("DOMContentLoaded", () => {
         if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">正在载入...</div>`;
         profileBulkMode = false;
         profileSelectedItems.clear();
-        const response = await fetch(`/api/profile/section/${encodeURIComponent(section)}?page=${page}`);
-        if (!response.ok) {
-            if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">${escapeHtml(await response.text() || "载入失败")}</div>`;
-            return;
+        let lastError = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                if (attempt > 1) {
+                    if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">正在重试（${attempt}/3）...</div>`;
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+                const response = await fetch(`/api/profile/section/${encodeURIComponent(section)}?page=${page}`);
+                if (!response.ok) throw new Error(await response.text() || "载入失败");
+                const data = await response.json();
+                activeProfileTotalPages = Number(data.totalPages || 1);
+                if (profileSectionTitle) profileSectionTitle.textContent = data.title || section;
+                if (profilePageIndicator) profilePageIndicator.textContent = `${page} / ${activeProfileTotalPages}`;
+                if (profilePrevPageBtn) profilePrevPageBtn.disabled = page <= 1;
+                if (profileNextPageBtn) profileNextPageBtn.disabled = page >= activeProfileTotalPages;
+                renderProfileSectionItems(section, data.items || []);
+                return;
+            } catch (error) {
+                lastError = error;
+            }
         }
-        const data = await response.json();
-        activeProfileTotalPages = Number(data.totalPages || 1);
-        if (profileSectionTitle) profileSectionTitle.textContent = data.title || section;
-        if (profilePageIndicator) profilePageIndicator.textContent = `${page} / ${activeProfileTotalPages}`;
-        if (profilePrevPageBtn) profilePrevPageBtn.disabled = page <= 1;
-        if (profileNextPageBtn) profileNextPageBtn.disabled = page >= activeProfileTotalPages;
-        renderProfileSectionItems(section, data.items || []);
+        if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">${escapeHtml(lastError?.message || "载入失败")}</div>`;
     }
 
     async function loadSubscriptionDetailView(pushState = true, preSelectKey = null) {
@@ -2622,6 +2642,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 if(liToActivate) {
                     document.querySelectorAll("#categoryList li").forEach(i => i.classList.remove("active"));
                     liToActivate.classList.add("active");
+                }
+            } else if (state.view === "viewBrowse") {
+                // No category/search in state — reload browse content if grid is empty
+                if (videoGrid && videoGrid.children.length === 0) {
+                    const activeCat = document.querySelector("#categoryList li.active");
+                    if (activeCat && activeCat.dataset.cat) {
+                        loadBrowseCategory(activeCat.dataset.cat, 1, false);
+                    }
                 }
             } else if (state.view === "viewParser" && state.url) {
                 loadParserUrl(state.url, false, true);
