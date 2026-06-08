@@ -43,8 +43,13 @@ class BrowserCookieCollector:
                 raise RuntimeError(f"无法启动 Cookie 抓取浏览器: {last_error}") from last_error
 
             page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-            await page.goto(HANIME_ORIGIN + "/", wait_until="domcontentloaded", timeout=60000)
-            await wait_for_cf_cookie(self._context, timeout_seconds=180)
+            try:
+                await page.goto(HANIME_ORIGIN + "/", wait_until="domcontentloaded", timeout=60000)
+            except Exception:
+                # Cloudflare managed challenges can keep navigation pending while
+                # the browser is still usable. Keep the window open for the user.
+                pass
+            await wait_for_cf_cookie(self._context, timeout_seconds=300)
             cookies = await self._context.cookies(HANIME_ORIGIN)
             user_agent = await page.evaluate("navigator.userAgent")
             save_cookies(cookies, self.home, user_agent=user_agent)

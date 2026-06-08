@@ -68,6 +68,15 @@ def test_profile_watch_later_and_likes_have_bulk_delete_controls():
     assert "likes" in app_js
 
 
+def test_profile_likes_bulk_delete_sends_current_liked_state():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
+
+    likes_branch = app_js[app_js.index('section === "likes"'):app_js.index("return Promise.resolve();")]
+    assert "/api/video/favorite" in likes_branch
+    assert "isFav: true" in likes_branch
+    assert "isFav: false" not in likes_branch
+
+
 def test_frontend_comment_reply_create_ui():
     app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
 

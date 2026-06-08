@@ -2142,7 +2142,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 return postJson("/api/video/favorite", {
                     videoId,
                     pageUrl: target,
-                    isFav: false  // false = 取消喜欢（删除）
+                    isFav: true
                 });
             }
             return Promise.resolve();
