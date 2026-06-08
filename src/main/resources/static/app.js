@@ -2125,29 +2125,33 @@ document.addEventListener("DOMContentLoaded", () => {
     async function deleteSelectedProfileItems(section) {
         if (!isBulkManageableProfileSection(section) || !profileSelectedItems.size || !requireLogin()) return;
         const selected = Array.from(profileSelectedItems.values());
-        const failed = [];
-        for (const item of selected) {
+
+        // 并行发起所有删除请求，加速批量操作
+        const results = await Promise.allSettled(selected.map(item => {
             const target = item.url || item.pageUrl || item.link || "";
             const videoId = item.videoId || videoIdFromUrl(target);
-            try {
-                if (section === "watchLater") {
-                    await postJson("/api/video/watch-later", {
-                        videoId,
-                        pageUrl: target,
-                        listCode: item.listCode || item.watchLaterCode || "WL",
-                        isChecked: false
-                    });
-                } else if (section === "likes") {
-                    await postJson("/api/video/favorite", {
-                        videoId,
-                        pageUrl: target,
-                        isFav: true
-                    });
-                }
-            } catch (error) {
-                failed.push(item.title || item.name || target || videoId);
+            if (section === "watchLater") {
+                return postJson("/api/video/watch-later", {
+                    videoId,
+                    pageUrl: target,
+                    // 不发送 fallback "WL"，让后端从视频页解析真实的 watchLaterCode
+                    listCode: item.listCode || item.watchLaterCode || "",
+                    isChecked: false
+                });
+            } else if (section === "likes") {
+                return postJson("/api/video/favorite", {
+                    videoId,
+                    pageUrl: target,
+                    isFav: false  // false = 取消喜欢（删除）
+                });
             }
-        }
+            return Promise.resolve();
+        }));
+
+        const failed = results
+            .map((r, i) => r.status === "rejected" ? (selected[i].title || selected[i].name || selected[i].videoId || "") : null)
+            .filter(Boolean);
+
         profileSelectedItems.clear();
         profileBulkMode = false;
         await loadProfileSection(section, activeProfilePage, false);
@@ -2232,6 +2236,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!requireLogin()) return;
         switchView("viewProfile", false);
         if (pushState) history.pushState({ view: "viewProfile" }, "", "#profile");
+        profileSections?.classList.remove("hidden");
         profileSectionDetail?.classList.add("hidden");
         subscriptionCreatorStrip?.classList.add("hidden");
         profilePageHeader?.classList.remove("hidden");
