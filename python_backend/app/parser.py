@@ -10,6 +10,14 @@ from selectolax.parser import HTMLParser, Node
 BASE_URL = "https://hanime1.me"
 
 
+def absolute_image_url(value: str, current_url: str = BASE_URL) -> str:
+    value = clean_url(value)
+    if not value or value.startswith(("data:", "blob:", "javascript:")):
+        return value if value.startswith("data:") else ""
+    base = current_url if current_url.startswith("http") else BASE_URL
+    return urljoin(base, value)
+
+
 def extract_video_page(page_url: str, html: str, download_html: str | None = None) -> dict:
     source_html = html or ""
     download_source = download_html or ""
@@ -21,8 +29,10 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
     creator_avatar = ""
     creator_url = ""
     creator_id = ""
-    
-    user_link = tree.css_first('a[href*="/user/"]')
+    creator_post = extract_creator_post(tree)
+    artist_id = (creator_post or {}).get("artistId") or ""
+
+    user_link = find_user_link(tree, artist_id) or tree.css_first('a[href*="/user/"]')
     if user_link:
         creator_url = clean_url(user_link.attributes.get("href", ""))
         if creator_url:
@@ -32,7 +42,7 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
         
         imgs = user_link.css("img")
         if imgs:
-            creator_avatar = imgs[-1].attributes.get("src", "")
+            creator_avatar = first_image_url(imgs[-1], page_url)
             
         name_node = tree.css_first("#video-artist-name")
         if name_node:
@@ -45,12 +55,11 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
     like_status = attr(tree.css_first("[name='like-status'], [name=like-status]"), "value")
     unlike_status = attr(tree.css_first("[name='unlike-status'], [name=unlike-status]"), "value")
     my_list = extract_my_list(tree)
-    creator_post = extract_creator_post(tree)
 
     result = {
         "videoUrl": clean_url(video_url),
         "title": normalize_title(extract_title(tree)),
-        "thumbnail": extract_thumbnail(tree),
+        "thumbnail": extract_thumbnail(tree, page_url),
         "videoId": extract_video_id(page_url),
         "playlist": extract_cards(tree.css("#video-playlist-wrapper a[href*='watch?v=']"), page_url),
         "relatedVideos": extract_related_videos(tree, page_url),
@@ -131,6 +140,23 @@ def extract_creator_post(tree: HTMLParser) -> dict | None:
     }
 
 
+def find_user_link(tree: HTMLParser, user_id: str):
+    if not user_id:
+        return None
+    for link in tree.css('a[href*="/user/"]'):
+        href = link.attributes.get("href", "")
+        match = re.search(r"/user/(\d+)", href)
+        if match and match.group(1) == str(user_id):
+            return link
+    return None
+
+
+def first_image_url(node: Node | None, current_url: str = BASE_URL) -> str:
+    if not node:
+        return ""
+    return absolute_image_url(node.attributes.get("data-src") or node.attributes.get("src") or "", current_url)
+
+
 def parse_home_hero(tree: HTMLParser) -> dict | None:
     wrapper = tree.css_first("#home-banner-wrapper")
     if not wrapper:
@@ -163,18 +189,18 @@ def parse_home_hero(tree: HTMLParser) -> dict | None:
     thumbnail = ""
     desktop_bg_node = tree.css_first("div[style*='aspect-ratio: 21'] img")
     if desktop_bg_node:
-        thumbnail = desktop_bg_node.attributes.get("src", "")
+        thumbnail = first_image_url(desktop_bg_node)
         
     if not thumbnail:
         mobile_bg_node = tree.css_first(".hidden-md.hidden-lg img[src*='files/']")
         if mobile_bg_node:
-            thumbnail = mobile_bg_node.attributes.get("src", "")
+            thumbnail = first_image_url(mobile_bg_node)
             
     if not thumbnail:
         for img in tree.css("img"):
             src = img.attributes.get("src", "")
             if re.search(r'\d+h?\.(?:jpg|png|webp|jpeg)', src) and "user_default" not in src and "playlist" not in src:
-                thumbnail = src
+                thumbnail = absolute_image_url(src)
                 break
 
     video_id = ""
@@ -364,7 +390,7 @@ def extract_title(tree: HTMLParser) -> str:
     return title.text(strip=True) if title else ""
 
 
-def extract_thumbnail(tree: HTMLParser) -> str:
+def extract_thumbnail(tree: HTMLParser, current_url: str = BASE_URL) -> str:
     for selector, attr in (
         ("meta[itemprop='thumbnailUrl']", "content"),
         ("meta[property='og:image']", "content"),
@@ -372,7 +398,7 @@ def extract_thumbnail(tree: HTMLParser) -> str:
     ):
         node = tree.css_first(selector)
         if node and node.attributes.get(attr):
-            return node.attributes[attr]
+            return absolute_image_url(node.attributes[attr], current_url)
     return ""
 
 
@@ -400,7 +426,7 @@ def extract_cards(nodes: list[Node], current_url: str) -> list[dict[str, str]]:
         if not url or url in seen:
             continue
         title = extract_card_title(node)
-        image = best_image(node)
+        image = best_image(node, current_url)
         if not title or not image:
             continue
             
@@ -480,11 +506,11 @@ def extract_card_title(node: Node) -> str:
     return node.attributes.get("title", "")
 
 
-def best_image(node: Node) -> str:
+def best_image(node: Node, current_url: str = BASE_URL) -> str:
     for image in node.css("img[data-src], img[src]"):
         value = image.attributes.get("data-src") or image.attributes.get("src") or ""
         if value and "card_doujin_background" not in value.lower():
-            return value
+            return absolute_image_url(value, current_url)
     curr = node.parent
     for _ in range(3):
         if not curr:
@@ -492,7 +518,7 @@ def best_image(node: Node) -> str:
         for image in curr.css("img[data-src], img[src]"):
             value = image.attributes.get("data-src") or image.attributes.get("src") or ""
             if value and "card_doujin_background" not in value.lower():
-                return value
+                return absolute_image_url(value, current_url)
         curr = curr.parent
     return ""
 
@@ -535,7 +561,7 @@ def parse_subscription_creators(html: str, exclude_user_id: str = "") -> list[di
         img = a.css_first("img")
         avatar = ""
         if img:
-            avatar = img.attributes.get("src") or img.attributes.get("data-src") or ""
+            avatar = first_image_url(img)
         user_link_map[uid] = (avatar, a.text(strip=True))
 
     creators: list[dict] = []
@@ -574,7 +600,7 @@ def parse_subscription_creators(html: str, exclude_user_id: str = "") -> list[di
                     user_id = m2.group(1)
                 img = user_link.css_first("img")
                 if img:
-                    avatar_url = img.attributes.get("src") or img.attributes.get("data-src") or ""
+                    avatar_url = first_image_url(img)
                 break
             container = container.parent
 
@@ -633,7 +659,7 @@ def parse_query_creator_info(html: str) -> dict:
         avatar = ""
         name = ""
         if img:
-            avatar = img.attributes.get("src") or img.attributes.get("data-src") or ""
+            avatar = first_image_url(img)
             name = img.attributes.get("alt", "").strip()
         if not name:
             name = user_link.text(strip=True)
@@ -662,7 +688,8 @@ def parse_creator_avatar_from_profile(html: str) -> str:
         node = tree.css_first(selector)
         if node:
             src = node.attributes.get("src") or node.attributes.get("data-src") or ""
-            if src and src.startswith("http"):
+            src = absolute_image_url(src)
+            if src:
                 return src
     return ""
 
@@ -691,7 +718,7 @@ def parse_playlist_grid(html: str) -> list[dict[str, str]]:
         img_node = node.css_first("img")
         thumbnail = ""
         if img_node:
-            thumbnail = img_node.attributes.get("src") or img_node.attributes.get("data-src") or ""
+            thumbnail = first_image_url(img_node)
             
         # Video count / stat
         stat_node = node.css_first(".stats-container .stat-item, .stat-item")

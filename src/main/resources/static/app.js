@@ -122,8 +122,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentVideoUrl = "";
     let currentRawVideoUrl = "";
-    let currentProxiedVideoUrl = "";
-    let currentVideoFallbackTried = false;
     let hlsInstance = null; // hls.js instance
     let currentView = 'viewLanding';
     let currentCategory = '首页';
@@ -146,6 +144,9 @@ document.addEventListener("DOMContentLoaded", () => {
     let activeProfileSection = "";
     let activeProfilePage = 1;
     let activeProfileTotalPages = 1;
+    let profileBulkMode = false;
+    let currentProfileSectionItems = [];
+    const profileSelectedItems = new Map();
     let currentBrowseVideos = [];
     let currentPlaylistItems = [];
     let currentRelatedVideos = [];
@@ -231,6 +232,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (authHint) authHint.textContent = authState.loggedIn ? "主页" : "登录";
         if (authAvatar) {
             const avatar = authState.avatarUrl ? imageUrl(authState.avatarUrl) : "";
+            authAvatar.referrerPolicy = "no-referrer";
             authAvatar.src = avatar;
             authAvatar.style.visibility = avatar ? "visible" : "hidden";
         }
@@ -423,35 +425,41 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    function proxyImageUrl(url) {
-        return url ? `/api/proxy/image?url=${encodeURIComponent(url)}` : "";
+    function directImageUrl(url) {
+        return String(url || "").trim();
     }
 
     function imageUrl(url) {
-        return proxyImageUrl(url);
+        return directImageUrl(url);
+    }
+
+    function setDetailCreatorAvatar(rawUrl) {
+        if (!creatorAvatar) return;
+        const avatar = String(rawUrl || "").trim();
+        creatorAvatar.onerror = () => {
+            creatorAvatar.removeAttribute("src");
+            creatorAvatar.classList.add("hidden");
+        };
+        if (avatar) {
+            creatorAvatar.classList.remove("hidden");
+            creatorAvatar.referrerPolicy = "no-referrer";
+            creatorAvatar.src = imageUrl(avatar);
+        } else {
+            creatorAvatar.removeAttribute("src");
+            creatorAvatar.classList.add("hidden");
+        }
     }
 
     function directMediaUrl(url) {
         return url || "";
     }
 
-    function proxyVideoUrl(url) {
-        return url ? `/api/proxy/video?url=${encodeURIComponent(url)}` : "";
-    }
-
-    window.fallbackImage = (img) => {
-        const rawUrl = img?.dataset?.srcRaw;
-        if (!img || !rawUrl || img.dataset.proxyTried === "1") return;
-        img.dataset.proxyTried = "1";
-        img.src = proxyImageUrl(rawUrl);
-    };
-
     function preloadCurrentVideo() {
         if (!currentVideoUrl || currentVideoUrl.includes(".m3u8")) return;
-        if (currentVideoUrl === currentRawVideoUrl) return;
         playerWrapper.classList.remove("hidden");
         playerWrapper.classList.add("preloading");
         videoPlayer.onerror = null;
+        videoPlayer.referrerPolicy = "no-referrer";
         videoPlayer.preload = "metadata";
         if (videoPlayer.dataset.src !== currentVideoUrl) {
             videoPlayer.dataset.src = currentVideoUrl;
@@ -816,12 +824,12 @@ document.addEventListener("DOMContentLoaded", () => {
             `;
         }
 
-        userProfileHeader.style.setProperty('--avatar-url', `url('${imageUrl(creator.creatorAvatar)}')`);
+        userProfileHeader.style.setProperty('--avatar-url', 'none');
         userProfileHeader.innerHTML = `
             <div class="playlist-rows-wrapper">
                 <div class="profile-main-container">
                     <div class="profile-avatar-wrapper">
-                        <img src="${imageUrl(creator.creatorAvatar)}" data-src-raw="${escapeHtml(creator.creatorAvatar || "")}" onerror="fallbackImage(this)" alt="avatar">
+                        <img src="${imageUrl(creator.creatorAvatar)}" referrerpolicy="no-referrer" alt="avatar">
                     </div>
                     <div class="profile-content-right">
                         <h1 class="profile-display-name">${escapeHtml(creator.creatorName)}</h1>
@@ -893,7 +901,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         card.innerHTML = `
             <div class="grid-thumb-container${isSelected ? ' selected' : ''}">
-                <img src="${imageUrl(vid.thumbnail)}" data-src-raw="${escapeHtml(vid.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" class="grid-thumb" alt="cover">
+                <img src="${imageUrl(vid.thumbnail)}" referrerpolicy="no-referrer" loading="lazy" class="grid-thumb" alt="cover">
                 ${vid.videoCount ? `<div class="grid-item-playlist-badge">${escapeHtml(vid.videoCount)}</div>` : ''}
                 <div class="grid-select-overlay${isSelected ? ' visible' : ''}">✓ 已选</div>
             </div>
@@ -959,7 +967,7 @@ document.addEventListener("DOMContentLoaded", () => {
         container.innerHTML = `
             <div class="horizontal-card">
                 <div class="thumb-container${isSelected ? ' selected' : ''}">
-                    <img class="main-thumb" src="${thumbnail}" data-src-raw="${escapeHtml(vid.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" alt="cover">
+                    <img class="main-thumb" src="${thumbnail}" referrerpolicy="no-referrer" loading="lazy" alt="cover">
                     <div class="grid-select-overlay${isSelected ? ' visible' : ''}">✓ 已选</div>
                 </div>
                 <div class="home-stats-bar">
@@ -1032,7 +1040,7 @@ document.addEventListener("DOMContentLoaded", () => {
         
         heroDiv.innerHTML = `
             <div class="hero-bg-wrapper">
-                <img class="hero-bg-img" src="${heroThumb}" data-src-raw="${escapeHtml(hero.thumbnail || "")}" onerror="fallbackImage(this)" alt="hero background">
+                <img class="hero-bg-img" src="${heroThumb}" referrerpolicy="no-referrer" alt="hero background">
                 <div class="hero-overlay"></div>
             </div>
             <div class="hero-content">
@@ -1255,18 +1263,8 @@ document.addEventListener("DOMContentLoaded", () => {
         return actions.join("");
     }
 
-    function proxiedImageUrl(url) {
-        return proxyImageUrl(url);
-    }
-
     function historyCoverUrl(task) {
-        if (!task || (!task.pageUrl && !task.thumbnail)) return "";
-        const params = new URLSearchParams();
-        params.set("url", task.pageUrl || task.thumbnail || "");
-        if (task.thumbnail) {
-            params.set("thumbnail", task.thumbnail);
-        }
-        return `/api/proxy/history-cover?${params.toString()}`;
+        return imageUrl(task?.thumbnail || "");
     }
 
     // 封面图片横竖检测
@@ -1345,12 +1343,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const pageUrl = escapeHtml(task.pageUrl || "");
             const clickableClass = task.pageUrl ? "is-clickable" : "";
             const coverUrl = historyCoverUrl(task);
-            const fallbackCoverUrl = proxiedImageUrl(task.thumbnail);
             const cover = coverUrl
-                ? `<img src="${coverUrl}" class="download-history-thumb" alt="cover" loading="lazy" onerror="this.style.display='none'" onload="setHistoryCoverOrientation(this)" data-fallback-src="${escapeHtml(fallbackCoverUrl)}">`
-                : (fallbackCoverUrl
-                    ? `<img src="${fallbackCoverUrl}" class="download-history-thumb" alt="cover" loading="lazy" onload="setHistoryCoverOrientation(this)">`
-                    : renderHistoryPlaceholder());
+                ? `<img src="${escapeHtml(coverUrl)}" class="download-history-thumb" alt="cover" referrerpolicy="no-referrer" loading="lazy" onload="setHistoryCoverOrientation(this)">`
+                : renderHistoryPlaceholder();
             return `
             <article class="download-card history ${clickableClass} ${String(task.status || "").toLowerCase()}" data-page-url="${pageUrl}" tabindex="${task.pageUrl ? '0' : '-1'}">
                 <div class="download-history-cover">
@@ -1370,7 +1365,6 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
         }).join("");
         bindHistoryCardInteractions();
-        bindHistoryCoverFallbacks();
     }
 
     function openHistoryTask(pageUrl) {
@@ -1396,20 +1390,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     event.preventDefault();
                     openHistoryTask(card.dataset.pageUrl);
                 }
-            });
-        });
-    }
-
-    function bindHistoryCoverFallbacks() {
-        downloadHistoryList.querySelectorAll(".download-history-thumb[data-fallback-src]").forEach((image) => {
-            image.addEventListener("error", () => {
-                const fallbackSrc = image.dataset.fallbackSrc;
-                if (fallbackSrc && image.dataset.fallbackTried !== "true") {
-                    image.dataset.fallbackTried = "true";
-                    image.src = fallbackSrc;
-                    return;
-                }
-                image.replaceWith(createHistoryPlaceholderElement());
             });
         });
     }
@@ -1643,7 +1623,7 @@ document.addEventListener("DOMContentLoaded", () => {
             card.className = "grid-item related-grid-item";
             card.innerHTML = `
                 <div class="grid-thumb-container">
-                    <img src="${imageUrl(item.thumbnail)}" data-src-raw="${escapeHtml(item.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" class="grid-thumb" alt="cover">
+                    <img src="${imageUrl(item.thumbnail)}" referrerpolicy="no-referrer" loading="lazy" class="grid-thumb" alt="cover">
                 </div>
                 <div class="grid-title" title="${escapeHtml(item.title || "")}">${escapeHtml(item.title || "未命名视频")}</div>
             `;
@@ -1654,13 +1634,12 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             relatedVideoGrid.appendChild(card);
         });
-
     }
 
     function renderCommentAvatar(comment, className = "comment-avatar") {
         const userName = comment?.userName || "?";
         if (comment?.avatarUrl) {
-            return `<img class="${className}" src="${imageUrl(comment.avatarUrl)}" alt="avatar" loading="lazy">`;
+            return `<img class="${className}" src="${imageUrl(comment.avatarUrl)}" alt="avatar" referrerpolicy="no-referrer" loading="lazy">`;
         }
         return `<div class="${className} placeholder">${escapeHtml(userName.slice(0, 1))}</div>`;
     }
@@ -1834,18 +1813,141 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    function createProfileItemCard(item) {
+    function isBulkManageableProfileSection(section = activeProfileSection) {
+        return section === "watchLater" || section === "likes";
+    }
+
+    function profileItemKey(item) {
+        return item?.url || item?.pageUrl || item?.link || item?.videoId || item?.title || "";
+    }
+
+    function renderProfileBulkToolbar(section, items = []) {
+        const titleRow = profileSectionTitle?.parentElement;
+        if (!titleRow) return;
+        let toolbar = titleRow.querySelector(".profile-bulk-toolbar");
+        if (!isBulkManageableProfileSection(section)) {
+            toolbar?.remove();
+            return;
+        }
+        if (!toolbar) {
+            toolbar = document.createElement("div");
+            toolbar.className = "profile-bulk-toolbar";
+            titleRow.appendChild(toolbar);
+        }
+        const selectedCount = profileSelectedItems.size;
+        toolbar.innerHTML = `
+            <button class="btn-secondary profile-bulk-toggle" type="button">${profileBulkMode ? "退出管理" : "批量管理"}</button>
+            <button class="btn-secondary profile-bulk-select-all" type="button" ${profileBulkMode ? "" : "disabled"}>全选本页</button>
+            <button class="btn-secondary profile-bulk-clear" type="button" ${profileBulkMode ? "" : "disabled"}>取消选择</button>
+            <button class="btn-secondary profile-bulk-delete" type="button" ${profileBulkMode && selectedCount ? "" : "disabled"}>删除选中 ${selectedCount ? `(${selectedCount})` : ""}</button>
+        `;
+        toolbar.querySelector(".profile-bulk-toggle")?.addEventListener("click", () => toggleProfileBulkMode(section, items));
+        toolbar.querySelector(".profile-bulk-select-all")?.addEventListener("click", () => {
+            items.forEach(item => {
+                const key = profileItemKey(item);
+                if (key) profileSelectedItems.set(key, item);
+            });
+            renderProfileSectionItems(section, items);
+        });
+        toolbar.querySelector(".profile-bulk-clear")?.addEventListener("click", () => {
+            profileSelectedItems.clear();
+            renderProfileSectionItems(section, items);
+        });
+        toolbar.querySelector(".profile-bulk-delete")?.addEventListener("click", () => deleteSelectedProfileItems(section));
+    }
+
+    function toggleProfileBulkMode(section, items = []) {
+        profileBulkMode = !profileBulkMode;
+        profileSelectedItems.clear();
+        renderProfileSectionItems(section, items);
+    }
+
+    function renderProfileSectionItems(section, items = []) {
+        if (!profileSectionGrid) return;
+        currentProfileSectionItems = Array.isArray(items) ? items : [];
+        renderProfileBulkToolbar(section, items);
+        profileSectionGrid.innerHTML = "";
+        if (!items.length) {
+            profileSectionGrid.innerHTML = `<div class="empty-playlist">暂无内容</div>`;
+            return;
+        }
+        items.forEach(item => profileSectionGrid.appendChild(createProfileItemCard(item, section)));
+    }
+
+    async function deleteSelectedProfileItems(section) {
+        if (!isBulkManageableProfileSection(section) || !profileSelectedItems.size || !requireLogin()) return;
+        const selected = Array.from(profileSelectedItems.values());
+        const failed = [];
+        for (const item of selected) {
+            const target = item.url || item.pageUrl || item.link || "";
+            const videoId = item.videoId || videoIdFromUrl(target);
+            try {
+                if (section === "watchLater") {
+                    await postJson("/api/video/watch-later", {
+                        videoId,
+                        pageUrl: target,
+                        listCode: item.listCode || item.watchLaterCode || "WL",
+                        isChecked: false
+                    });
+                } else if (section === "likes") {
+                    await postJson("/api/video/favorite", {
+                        videoId,
+                        pageUrl: target,
+                        isFav: true
+                    });
+                }
+            } catch (error) {
+                failed.push(item.title || item.name || target || videoId);
+            }
+        }
+        profileSelectedItems.clear();
+        profileBulkMode = false;
+        await loadProfileSection(section, activeProfilePage, false);
+        if (failed.length) {
+            alert(`部分删除失败: ${failed.slice(0, 5).join("、")}${failed.length > 5 ? "..." : ""}`);
+        }
+    }
+
+    function createProfileItemCard(item, bulkSection = "") {
         if (item.isCreator) {
             return createCreatorProfileCard(item);
         }
-        const card = document.createElement("button");
+        const enableBulk = profileBulkMode && isBulkManageableProfileSection(bulkSection);
+        const key = profileItemKey(item);
+        const card = document.createElement(enableBulk ? "article" : "button");
         card.className = "profile-preview-card";
-        card.type = "button";
+        if (!enableBulk) card.type = "button";
+        if (enableBulk) {
+            card.tabIndex = 0;
+            card.classList.add("profile-bulk-card");
+            if (profileSelectedItems.has(key)) card.classList.add("selected");
+        }
         card.innerHTML = `
-            <img src="${imageUrl(item.thumbnail || item.cover || "")}" data-src-raw="${escapeHtml(item.thumbnail || item.cover || "")}" onerror="fallbackImage(this)" loading="lazy" alt="cover">
+            ${enableBulk ? `<label class="profile-bulk-check-wrap"><input class="profile-bulk-check" type="checkbox" ${profileSelectedItems.has(key) ? "checked" : ""} aria-label="选择"></label>` : ""}
+            <img src="${imageUrl(item.thumbnail || item.cover || "")}" referrerpolicy="no-referrer" loading="lazy" alt="cover">
             <div>${escapeHtml(item.title || item.name || "未命名内容")}</div>
         `;
+        card.querySelector(".profile-bulk-check")?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (!key) return;
+            if (event.currentTarget.checked) {
+                profileSelectedItems.set(key, item);
+            } else {
+                profileSelectedItems.delete(key);
+            }
+            renderProfileBulkToolbar(bulkSection, currentProfileSectionItems);
+        });
         card.addEventListener("click", () => {
+            if (enableBulk) {
+                if (!key) return;
+                if (profileSelectedItems.has(key)) {
+                    profileSelectedItems.delete(key);
+                } else {
+                    profileSelectedItems.set(key, item);
+                }
+                renderProfileSectionItems(bulkSection, currentProfileSectionItems);
+                return;
+            }
             const target = item.url || item.pageUrl || item.link;
             if (!target) return;
             if (target.includes("playlist?list=")) {
@@ -1865,7 +1967,7 @@ document.addEventListener("DOMContentLoaded", () => {
         card.dataset.creatorKey = item.searchQuery || item.name || "";
         const initial = (item.name || "?").charAt(0).toUpperCase();
         const avatarHtml = item.avatarUrl
-            ? `<img class="creator-avatar-img" src="${imageUrl(item.avatarUrl)}" data-src-raw="${escapeHtml(item.avatarUrl)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy" alt="${escapeHtml(item.name || "")}"><span class="creator-avatar-initial" style="display:none">${escapeHtml(initial)}</span>`
+            ? `<img class="creator-avatar-img" src="${imageUrl(item.avatarUrl)}" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy" alt="${escapeHtml(item.name || "")}"><span class="creator-avatar-initial" style="display:none">${escapeHtml(initial)}</span>`
             : `<span class="creator-avatar-initial">${escapeHtml(initial)}</span>`;
         card.innerHTML = `
             <div class="creator-avatar-wrap">${avatarHtml}</div>
@@ -1893,7 +1995,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const user = await response.json();
                 if (profilePageHeader && user.username) {
                     profilePageHeader.innerHTML = `
-                        <img class="profile-page-avatar" src="${imageUrl(user.avatarUrl || "")}" alt="avatar">
+                        <img class="profile-page-avatar" src="${imageUrl(user.avatarUrl || "")}" referrerpolicy="no-referrer" alt="avatar">
                         <div><h1>${escapeHtml(user.username || "个人主页")}</h1><p>稍后观看、喜欢、播放清单、订阅与观看历史</p></div>
                     `;
                 }
@@ -1954,6 +2056,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 if (wrap && initEl) {
                                     const img = document.createElement("img");
                                     img.className = "creator-avatar-img";
+                                    img.referrerPolicy = "no-referrer";
                                     img.src = imageUrl(av);
                                     img.loading = "lazy";
                                     img.alt = item.name || "";
@@ -1987,6 +2090,8 @@ document.addEventListener("DOMContentLoaded", () => {
         profilePageHeader?.classList.add("hidden");
         if (profilePaginationBar) profilePaginationBar.classList.remove("hidden");
         if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">正在载入...</div>`;
+        profileBulkMode = false;
+        profileSelectedItems.clear();
         const response = await fetch(`/api/profile/section/${encodeURIComponent(section)}?page=${page}`);
         if (!response.ok) {
             if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">${escapeHtml(await response.text() || "载入失败")}</div>`;
@@ -1998,11 +2103,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (profilePageIndicator) profilePageIndicator.textContent = `${page} / ${activeProfileTotalPages}`;
         if (profilePrevPageBtn) profilePrevPageBtn.disabled = page <= 1;
         if (profileNextPageBtn) profileNextPageBtn.disabled = page >= activeProfileTotalPages;
-        if (profileSectionGrid) {
-            profileSectionGrid.innerHTML = "";
-            (data.items || []).forEach(item => profileSectionGrid.appendChild(createProfileItemCard(item)));
-            if (!(data.items || []).length) profileSectionGrid.innerHTML = `<div class="empty-playlist">暂无内容</div>`;
-        }
+        renderProfileSectionItems(section, data.items || []);
     }
 
     async function loadSubscriptionDetailView(pushState = true, preSelectKey = null) {
@@ -2085,6 +2186,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!initial) return;
             const img = document.createElement("img");
             img.className = "sub-creator-chip-avatar";
+            img.referrerPolicy = "no-referrer";
             img.src = imageUrl(creator.avatarUrl);
             img.loading = "lazy";
             img.alt = escapeHtml(creator.name || "");
@@ -2106,7 +2208,7 @@ document.addEventListener("DOMContentLoaded", () => {
             chip.dataset.searchQuery = creator.searchQuery || creator.name || "";
             const initial = (creator.name || "?").charAt(0).toUpperCase();
             const buildAvatarHtml = (avatarUrl) => avatarUrl
-                ? `<img class="sub-creator-chip-avatar" src="${imageUrl(avatarUrl)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy" alt="${escapeHtml(creator.name || "")}"><span class="sub-creator-chip-initial" style="display:none">${escapeHtml(initial)}</span>`
+                ? `<img class="sub-creator-chip-avatar" src="${imageUrl(avatarUrl)}" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy" alt="${escapeHtml(creator.name || "")}"><span class="sub-creator-chip-initial" style="display:none">${escapeHtml(initial)}</span>`
                 : `<span class="sub-creator-chip-initial">${escapeHtml(initial)}</span>`;
             chip.innerHTML = `${buildAvatarHtml(creator.avatarUrl)}<span class="sub-creator-chip-name">${escapeHtml(creator.name || "未知")}</span>`;
             chip.addEventListener("click", () => loadSubscriptionCreatorVideos(creator));
@@ -2189,7 +2291,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 card.className = "profile-preview-card";
                 card.type = "button";
                 card.innerHTML = `
-                    <img src="${imageUrl(item.thumbnail || item.cover || "")}" onerror="fallbackImage(this)" loading="lazy" alt="cover">
+                    <img src="${imageUrl(item.thumbnail || item.cover || "")}" referrerpolicy="no-referrer" loading="lazy" alt="cover">
                     <div>${escapeHtml(item.title || item.name || "未命名")}</div>
                 `;
                 card.addEventListener("click", () => {
@@ -2211,6 +2313,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!initial) return;
         const img = document.createElement("img");
         img.className = "sub-creator-chip-avatar";
+        img.referrerPolicy = "no-referrer";
         img.src = imageUrl(avatarUrl);
         img.loading = "lazy";
         img.alt = name;
@@ -2289,6 +2392,69 @@ document.addEventListener("DOMContentLoaded", () => {
                 loadProfileSummary(false);
             }
         }
+    }
+
+    function restoreInitialRouteFromHash() {
+        const hash = window.location.hash || "";
+        if (!hash || hash === "#") return false;
+
+        if (hash.startsWith("#parse?")) {
+            const params = new URLSearchParams(hash.slice("#parse?".length));
+            const url = params.get("v") || "";
+            if (!url) return false;
+            history.replaceState({ view: "viewParser", url }, "", hash);
+            loadParserUrl(url, false, true);
+            return true;
+        }
+
+        if (hash.startsWith("#search?")) {
+            const params = new URLSearchParams(hash.slice("#search?".length));
+            const page = parseInt(params.get("page") || "1", 10) || 1;
+            currentSearchState = normalizeSearchState({
+                query: params.get("query") || "",
+                type: params.get("type") || "",
+                genre: params.get("genre") || "",
+                sort: params.get("sort") || "",
+                date: params.get("date") || "",
+                duration: params.get("duration") || "",
+                tags: params.getAll("tags[]")
+            });
+            history.replaceState({ view: "viewBrowse", search: true, page, filters: currentSearchState }, "", hash);
+            loadSearchResults(page, false);
+            return true;
+        }
+
+        if (hash.startsWith("#profile-")) {
+            const match = hash.match(/^#profile-([a-z-]+)-(\d+)$/i);
+            if (match) {
+                const section = match[1];
+                const page = parseInt(match[2] || "1", 10) || 1;
+                history.replaceState({ view: "viewProfile", section, page }, "", hash);
+                loadProfileSection(section, page, false);
+                return true;
+            }
+        }
+
+        if (hash.startsWith("#browse-")) {
+            const body = hash.slice("#browse-".length);
+            const lastDash = body.lastIndexOf("-");
+            if (lastDash > 0) {
+                const category = decodeURIComponent(body.slice(0, lastDash));
+                const page = parseInt(body.slice(lastDash + 1) || "1", 10) || 1;
+                history.replaceState({ view: "viewBrowse", category, page }, "", hash);
+                loadBrowseCategory(category, page, false);
+                return true;
+            }
+        }
+
+        const viewId = hash.slice(1);
+        if (["viewLanding", "viewBrowse", "viewParser", "viewProfile"].includes(viewId)) {
+            history.replaceState({ view: viewId }, "", hash);
+            handleStateRestore({ view: viewId });
+            return true;
+        }
+
+        return false;
     }
 
     navLogo.addEventListener("click", () => switchView("viewLanding"));
@@ -2865,7 +3031,6 @@ document.addEventListener("DOMContentLoaded", () => {
     // ---- Video Player Logic ----
     playVideoBtn.addEventListener("click", () => {
         if (!currentVideoUrl) return;
-        currentVideoFallbackTried = false;
         recordCurrentWatchHistory();
         
         // Hide Cover, Show Player
@@ -2873,34 +3038,8 @@ document.addEventListener("DOMContentLoaded", () => {
         playerWrapper.classList.remove("hidden");
         playerWrapper.classList.remove("preloading");
 
-        const fallbackToProxyVideo = () => {
-            if (currentVideoFallbackTried || !currentProxiedVideoUrl || currentVideoUrl === currentProxiedVideoUrl) return;
-            currentVideoFallbackTried = true;
-            currentVideoUrl = currentProxiedVideoUrl;
-            if(hlsInstance) {
-                hlsInstance.destroy();
-                hlsInstance = null;
-            }
-            videoPlayer.pause();
-            videoPlayer.removeAttribute("src");
-            videoPlayer.load();
-            if (currentVideoUrl.includes(".m3u8") && Hls.isSupported()) {
-                hlsInstance = new Hls();
-                hlsInstance.loadSource(currentVideoUrl);
-                hlsInstance.attachMedia(videoPlayer);
-                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
-                    videoPlayer.play();
-                });
-            } else {
-                videoPlayer.onerror = null;
-                videoPlayer.dataset.src = currentVideoUrl;
-                videoPlayer.src = currentVideoUrl;
-                const playPromise = videoPlayer.play();
-                if (playPromise) playPromise.catch(() => {});
-            }
-        };
-
         // Use HLS.js for m3u8, native HTML5 for mp4
+        videoPlayer.referrerPolicy = "no-referrer";
         if (currentVideoUrl.includes(".m3u8")) {
             if (Hls.isSupported()) {
                 if(hlsInstance) hlsInstance.destroy();
@@ -2911,17 +3050,20 @@ document.addEventListener("DOMContentLoaded", () => {
                     videoPlayer.play();
                 });
                 hlsInstance.on(Hls.Events.ERROR, function(_event, data) {
-                    if (data && data.fatal) fallbackToProxyVideo();
+                    if (data && data.fatal) {
+                        console.warn("直链 HLS 播放失败", data);
+                    }
                 });
             } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
                 // For Native Safari
+                videoPlayer.referrerPolicy = "no-referrer";
                 videoPlayer.src = currentVideoUrl;
                 videoPlayer.addEventListener('loadedmetadata', function() {
                     videoPlayer.play();
                 });
             }
         } else {
-            videoPlayer.onerror = fallbackToProxyVideo;
+            videoPlayer.onerror = () => console.warn("直链视频播放失败");
             videoPlayer.preload = "auto";
             if (videoPlayer.dataset.src !== currentVideoUrl || videoPlayer.error) {
                 videoPlayer.dataset.src = currentVideoUrl;
@@ -2929,7 +3071,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 videoPlayer.load();
             }
             const playPromise = videoPlayer.play();
-            if (playPromise) playPromise.catch(fallbackToProxyVideo);
+            if (playPromise) playPromise.catch((error) => console.warn("直链视频播放失败", error));
         }
     });
 
@@ -2967,8 +3109,6 @@ document.addEventListener("DOMContentLoaded", () => {
         currentVideoData = null;
         currentRawVideoUrl = "";
         currentVideoUrl = "";
-        currentProxiedVideoUrl = "";
-        currentVideoFallbackTried = false;
         delete videoPlayer.dataset.src;
         currentPlaylistItems = [];
         currentRelatedVideos = [];
@@ -3038,29 +3178,20 @@ document.addEventListener("DOMContentLoaded", () => {
         currentRawVideoUrl = data.videoUrl || "";
         mainTitle.textContent = data.title || "未知标题";
         currentVideoUrl = directMediaUrl(currentRawVideoUrl);
-        currentProxiedVideoUrl = proxyVideoUrl(currentRawVideoUrl);
         preloadCurrentVideo();
         
         // Handle Creator Info Card
         if (data.creator && data.creator.id && data.creator.name) {
             if (creatorName) creatorName.textContent = data.creator.name;
             if (creatorAvatar) {
-                creatorAvatar.dataset.srcRaw = data.creator.avatar || "";
-                creatorAvatar.dataset.proxyTried = "0";
-                creatorAvatar.onerror = () => fallbackImage(creatorAvatar);
-                creatorAvatar.src = data.creator.avatar
-                    ? imageUrl(data.creator.avatar)
-                    : "https://via.placeholder.com/48x48.png?text=Avatar";
-                // Asynchronously fetch the real creator avatar (creator.avatar is the logged-in user's avatar)
+                setDetailCreatorAvatar(data.creator.avatar || "");
                 const artistId = data.creator.post?.artistId || data.creator.id;
                 if (artistId) {
                     fetch(`/api/creator/info?userId=${encodeURIComponent(artistId)}`)
                         .then(r => r.ok ? r.json() : null)
                         .then(info => {
                             if (info?.avatarUrl && creatorAvatar) {
-                                creatorAvatar.dataset.srcRaw = info.avatarUrl;
-                                creatorAvatar.dataset.proxyTried = "0";
-                                creatorAvatar.src = imageUrl(info.avatarUrl);
+                                setDetailCreatorAvatar(info.avatarUrl);
                             }
                         })
                         .catch(() => {});
@@ -3082,9 +3213,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Image Anti-Hotlink
         if (data.thumbnail) {
-            mainCover.dataset.srcRaw = data.thumbnail;
-            mainCover.dataset.proxyTried = "0";
-            mainCover.onerror = () => fallbackImage(mainCover);
+            mainCover.referrerPolicy = "no-referrer";
             mainCover.src = imageUrl(data.thumbnail);
         } else {
             mainCover.src = "https://via.placeholder.com/1280x720.png?text=No+Cover";
@@ -3111,7 +3240,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const el = document.createElement("div");
                 el.className = "playlist-item";
                 el.innerHTML = `
-                    <img src="${imageUrl(item.thumbnail)}" data-src-raw="${escapeHtml(item.thumbnail || "")}" onerror="fallbackImage(this)" loading="lazy" class="item-thumb" alt="thumb">
+                    <img src="${imageUrl(item.thumbnail)}" referrerpolicy="no-referrer" loading="lazy" class="item-thumb" alt="thumb">
                     <div class="item-details">
                         <div class="item-title" title="${item.title}">${item.title}</div>
                     </div>
@@ -3273,6 +3402,19 @@ document.addEventListener("DOMContentLoaded", () => {
             history.forward();
         }
     });
+
+    function handleMouseHistoryNavigation(event) {
+        if (isEditableTarget(event.target)) return;
+        if (event.button === 3) {
+            event.preventDefault();
+            history.back();
+        } else if (event.button === 4) {
+            event.preventDefault();
+            history.forward();
+        }
+    }
+
+    document.addEventListener("mouseup", handleMouseHistoryNavigation);
 
     if (commentsList) {
         commentsList.addEventListener("click", (event) => {
@@ -3469,5 +3611,6 @@ document.addEventListener("DOMContentLoaded", () => {
     fetchDownloadSnapshot();
     connectDownloadStream();
     window.addEventListener("resize", updatePlaylistPanelLayout);
+    restoreInitialRouteFromHash();
 
 });

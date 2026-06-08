@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, urlencode
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .downloads import DownloadManager
@@ -80,7 +79,8 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
                 headers={
                     "Cache-Control": "no-cache, no-store, must-revalidate",
                     "Pragma": "no-cache",
-                    "Expires": "0"
+                    "Expires": "0",
+                    "Referrer-Policy": "no-referrer",
                 }
             )
         return {"message": "Python backend is running"}
@@ -285,17 +285,25 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
 
     @app.post("/api/video/favorite")
     async def video_favorite(payload: dict):
-        token = await resolve_token(payload, scraper)
-        video_id = require_text(payload, "videoId", "缺少视频 ID")
-        user_id = require_text(payload, "currentUserId", "缺少用户 ID")
+        parsed = await resolve_video_payload(payload, scraper)
+        token = require_text(parsed, "csrfToken", "缺少 CSRF token")
+        video_id = require_text(parsed, "videoId", "缺少视频 ID")
+        user_id = parsed.get("currentUserId") or ""
+        if not user_id:
+            auth = await auth_me()
+            user_id = auth.get("userId") or ""
+        if not user_id:
+            raise HTTPException(status_code=400, detail="缺少用户 ID")
         is_fav = bool(payload.get("isFav"))
-        return await scraper.post_form("https://hanime1.me/like", {
+        result = await scraper.post_form("https://hanime1.me/like", {
             "_token": token,
             "like-foreign-id": video_id,
             "like-status": "1" if is_fav else "",
             "like-user-id": user_id,
             "like-is-positive": "1",
         })
+        clear_profile_section_cache(scraper, user_id, "likes")
+        return result
 
     @app.post("/api/video/watch-later")
     async def video_watch_later(payload: dict):
@@ -327,15 +335,11 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
             "_token": token,
             "input_id": list_code,
             "video_id": video_id,
-            "is_checked": "1" if payload.get("isChecked", True) else "",
+            "is_checked": bool_form_value(payload.get("isChecked", True)),
             "user_id": user_id,
         })
 
-        # 清除 watchLater 缓存，强制下次获取时重新请求最新数据
-        if user_id:
-            for page in range(1, 10):
-                url = f"https://hanime1.me/user/{user_id}/saves?page={page}"
-                scraper._html_cache.pop((url, "https://hanime1.me/"), None)
+        clear_watch_later_cache(scraper, user_id, payload.get("pageUrl"))
 
         return result
 
@@ -346,7 +350,7 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
             "_token": token,
             "input_id": require_text(payload, "listCode", "缺少播放清单代码"),
             "video_id": require_text(payload, "videoId", "缺少视频 ID"),
-            "is_checked": "1" if payload.get("isChecked", True) else "",
+            "is_checked": bool_form_value(payload.get("isChecked", True)),
             "user_id": payload.get("currentUserId") or "",
         })
 
@@ -488,45 +492,6 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
-    @app.get("/api/proxy/image")
-    async def proxy_image(url: str, request: Request):
-        img_cache_dir = home / "img_cache"
-        if url:
-            cache_bin, cache_meta = _img_cache_paths(img_cache_dir, url)
-            if cache_bin.exists() and cache_meta.exists():
-                try:
-                    ct = cache_meta.read_text(encoding="utf-8").strip()
-                    etag = f'"{cache_bin.stat().st_size}"'
-                    if request.headers.get("if-none-match") == etag:
-                        return Response(status_code=304)
-                    content = cache_bin.read_bytes()
-                    cache_bin.touch()
-                    return Response(content, media_type=ct, headers={
-                        "Cache-Control": "public, max-age=604800, immutable",
-                        "ETag": etag,
-                    })
-                except Exception:
-                    pass
-        content, content_type = await scraper.fetch_bytes(url, "https://hanime1.me/")
-        if url and content:
-            try:
-                cache_bin, cache_meta = _img_cache_paths(img_cache_dir, url)
-                cache_bin.parent.mkdir(parents=True, exist_ok=True)
-                cache_bin.write_bytes(content)
-                cache_meta.write_text(content_type, encoding="utf-8")
-                settings = settings_store.load()
-                max_bytes = int(float(settings.maxLocalCacheSizeGB) * 1024 ** 3)
-                _evict_img_cache(img_cache_dir, max_bytes)
-            except Exception:
-                pass
-        return Response(content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
-
-    @app.get("/api/proxy/history-cover")
-    async def proxy_history_cover(url: str, thumbnail: str = ""):
-        target = thumbnail or url
-        content, content_type = await scraper.fetch_bytes(target, "https://hanime1.me/")
-        return Response(content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
-
     @app.get("/api/proxy/video")
     async def proxy_video(url: str, request: Request):
         body, status_code, content_type, response_headers = await scraper.stream_bytes(
@@ -555,39 +520,6 @@ async def call_download(factory):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _img_cache_paths(cache_dir: Path, url: str) -> tuple[Path, Path]:
-    # Strip time-limited auth tokens (secure=) so the disk cache survives token rotation.
-    try:
-        parsed = urlparse(url)
-        qs = {k: v[0] for k, v in parse_qs(parsed.query).items() if k != "secure"}
-        stable_url = parsed._replace(query=urlencode(qs)).geturl()
-    except Exception:
-        stable_url = url
-    h = hashlib.md5(stable_url.encode()).hexdigest()
-    base = cache_dir / h[:2] / h
-    return base.with_suffix(".bin"), base.with_suffix(".meta")
-
-
-def _evict_img_cache(cache_dir: Path, max_bytes: int) -> None:
-    if not cache_dir.exists():
-        return
-    try:
-        files = sorted(cache_dir.rglob("*.bin"), key=lambda f: f.stat().st_mtime)
-        total = sum(f.stat().st_size for f in files if f.exists())
-        if total <= max_bytes:
-            return
-        target = int(max_bytes * 0.85)
-        for f in files:
-            if total <= target:
-                break
-            sz = f.stat().st_size
-            f.unlink(missing_ok=True)
-            f.with_suffix(".meta").unlink(missing_ok=True)
-            total -= sz
-    except Exception:
-        pass
-
-
 def log_cookie_task_result(task: asyncio.Task) -> None:
     try:
         task.result()
@@ -602,6 +534,36 @@ def require_text(payload: dict, key: str, message: str) -> str:
     if not value:
         raise HTTPException(status_code=400, detail=message)
     return value
+
+
+def bool_form_value(value) -> str:
+    return "true" if bool(value) else "false"
+
+
+def clear_watch_later_cache(scraper, user_id: str, page_url: str | None = None) -> None:
+    html_cache = getattr(scraper, "_html_cache", None)
+    if not isinstance(html_cache, dict):
+        return
+    if page_url:
+        html_cache.pop((str(page_url), "https://hanime1.me/"), None)
+    clear_profile_section_cache(scraper, user_id, "watchLater")
+
+
+def clear_profile_section_cache(scraper, user_id: str, section: str) -> None:
+    html_cache = getattr(scraper, "_html_cache", None)
+    if not isinstance(html_cache, dict) or not user_id:
+        return
+    paths = {
+        "watchLater": "saves",
+        "likes": "likes",
+    }
+    path = paths.get(section)
+    if not path:
+        return
+    if user_id:
+        for page in range(1, 10):
+            url = f"https://hanime1.me/user/{user_id}/{path}?page={page}"
+            html_cache.pop((url, "https://hanime1.me/"), None)
 
 
 async def resolve_video_payload(payload: dict, scraper) -> dict:

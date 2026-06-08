@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import importlib.util
+from PyInstaller.utils.hooks import collect_submodules
 
 if importlib.util.find_spec('curl_cffi') is None:
     raise RuntimeError(
@@ -20,11 +21,27 @@ a = Analysis(
         'uvicorn.protocols.http.auto',
         'uvicorn.protocols.websockets.auto',
         'uvicorn.lifespan.on',
+        'curl_cffi.requests',
+        *collect_submodules('playwright'),
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'pytest',
+        'pytest_asyncio',
+        'unittest',
+        'doctest',
+        'pdb',
+        'tkinter',
+        'matplotlib',
+        'numpy',
+        'pandas',
+        'scipy',
+        'IPython',
+        'jupyter',
+        'notebook',
+    ],
     noarchive=False,
     optimize=0,
 )
