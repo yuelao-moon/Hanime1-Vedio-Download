@@ -1802,17 +1802,25 @@ document.addEventListener("DOMContentLoaded", () => {
             repliesBox.innerHTML = `<div class="comment-reply-empty">暂无回复</div>`;
             return;
         }
+        const parentCommentId = escapeHtml(commentId);
         repliesBox.innerHTML = list.map((reply) => {
             const replyAvatar = renderCommentAvatar({
                 userName: reply.userName,
                 avatarUrl: reply.avatarUrl
             }, "comment-reply-avatar");
             return `
-                <div class="comment-reply-item">
+                <div class="comment-reply-item" ${reply.commentId ? `data-comment-id="${escapeHtml(reply.commentId)}"` : ""}>
                     ${replyAvatar}
                     <div class="comment-reply-body">
-                        <strong>${escapeHtml(reply.userName || "匿名用户")}</strong>
-                        <span>${escapeHtml(reply.content || "")}</span>
+                        <div class="comment-reply-head">
+                            <strong>${escapeHtml(reply.userName || "匿名用户")}</strong>
+                            ${reply.timeText ? `<span>${escapeHtml(reply.timeText)}</span>` : ""}
+                        </div>
+                        <div class="comment-reply-content">${escapeHtml(reply.content || "")}</div>
+                        <div class="comment-actions">
+                            ${renderCommentLikeActions(reply)}
+                            <button class="comment-reply-toggle-btn" type="button" data-comment-id="${parentCommentId}">回复</button>
+                        </div>
                     </div>
                 </div>
             `;
