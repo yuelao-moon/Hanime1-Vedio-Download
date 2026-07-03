@@ -1862,6 +1862,16 @@ body::-webkit-scrollbar-thumb:hover {
     object-fit: cover;
     border: 2px solid rgba(255,255,255,0.12);
 }
+.profile-page-user {
+    min-width: 0;
+    flex: 1;
+}
+.profile-logout-btn {
+    margin-left: auto;
+    background: rgba(255,100,100,0.1);
+    border-color: rgba(255,100,100,0.3);
+    color: #ff8a8a;
+}
 .profile-page-header h1 {
     font-size: 1.8rem;
     margin-bottom: 0.25rem;
@@ -1906,11 +1916,26 @@ body::-webkit-scrollbar-thumb:hover {
     font-weight: 600;
 }
 .profile-preview-row {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 1rem;
+    padding-bottom: 0.55rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,75,75,0.45) transparent;
+}
+.profile-detail-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 1rem;
 }
+.profile-detail-grid .profile-preview-card {
+    flex: none;
+}
+.profile-preview-row::-webkit-scrollbar { height: 5px; }
+.profile-preview-row::-webkit-scrollbar-thumb { background: rgba(255,75,75,0.45); border-radius: 3px; }
 .profile-preview-card {
+    flex: 0 0 180px;
     border: 1px solid rgba(255,255,255,0.07);
     background: rgba(12,12,16,0.58);
     border-radius: var(--radius-md);
@@ -2034,6 +2059,11 @@ body::-webkit-scrollbar-thumb:hover {
 .profile-preview-row:has(.creator-profile-card) {
     grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
 }
+.subscription-preview-row .creator-profile-card {
+    flex: 0 0 118px;
+}
+.subscription-preview-row::-webkit-scrollbar { height: 5px; }
+.subscription-preview-row::-webkit-scrollbar-thumb { background: rgba(255,75,75,0.45); border-radius: 3px; }
 /* ---- Subscription Creator Strip ---- */
 .subscription-creator-strip {
     display: flex;
@@ -2099,6 +2129,9 @@ body::-webkit-scrollbar-thumb:hover {
     line-height: 1.2;
 }
 .sub-creator-chip.active .sub-creator-chip-name { color: var(--text-main); }
+.profile-bulk-creator { position: relative; }
+.profile-bulk-creator.selected { border-color: rgba(255,75,75,0.8); background: rgba(255,75,75,0.16); }
+.profile-bulk-creator-check { position: absolute; top: 2px; right: 2px; z-index: 2; width: 18px; height: 18px; border-radius: 50%; background: var(--primary); color: #fff; font-weight: 900; display: grid; place-items: center; }
 /* ---- End Subscription Strip ---- */
 .hero-overlay {
     position: absolute;

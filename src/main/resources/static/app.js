@@ -109,6 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const favoriteVideoBtn = document.getElementById("favoriteVideoBtn");
     const watchLaterBtn = document.getElementById("watchLaterBtn");
     const myListBtn = document.getElementById("myListBtn");
+    const comicOriginalBtn = document.getElementById("comicOriginalBtn");
     const subscribeCreatorBtn = document.getElementById("subscribeCreatorBtn");
     const shortcutBackInput = document.getElementById("shortcutBack");
     const shortcutForwardInput = document.getElementById("shortcutForward");
@@ -518,6 +519,22 @@ document.addEventListener("DOMContentLoaded", () => {
             videoPlayer.src = currentVideoUrl;
             videoPlayer.load();
         }
+    }
+
+    function stopDetailMediaPlayback() {
+        if (hlsInstance) {
+            hlsInstance.destroy();
+            hlsInstance = null;
+        }
+        videoPlayer.pause();
+        videoPlayer.onerror = null;
+        delete videoPlayer.dataset.src;
+        videoPlayer.removeAttribute("src");
+        videoPlayer.load();
+        playerWrapper.querySelector(".video-error-overlay")?.remove();
+        playerWrapper.classList.add("hidden");
+        playerWrapper.classList.remove("preloading");
+        coverWrapper.classList.remove("hidden");
     }
 
     function normalizeSearchState(state = {}) {
@@ -1997,9 +2014,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function updateVideoAccountActions() {
         if (!currentVideoData) {
-            [favoriteVideoBtn, watchLaterBtn, myListBtn, subscribeCreatorBtn].forEach(btn => {
+            [favoriteVideoBtn, watchLaterBtn, myListBtn, comicOriginalBtn, subscribeCreatorBtn].forEach(btn => {
                 if (btn) btn.disabled = true;
             });
+            comicOriginalBtn?.classList.add("hidden");
             return;
         }
         if (favoriteVideoBtn) {
@@ -2015,6 +2033,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (myListBtn) {
             myListBtn.disabled = !(currentVideoData.myList?.items || []).length;
+        }
+        if (comicOriginalBtn) {
+            const comicUrl = currentVideoData.comicOriginal?.url || "";
+            comicOriginalBtn.classList.toggle("hidden", !comicUrl);
+            comicOriginalBtn.disabled = !comicUrl;
+            comicOriginalBtn.textContent = currentVideoData.comicOriginal?.title || "📖 漫画原作";
         }
         if (subscribeCreatorBtn) {
             const post = currentVideoData.creator?.post;
@@ -2061,8 +2085,10 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    const PROFILE_BULK_CONCURRENCY = 3;
+
     function isBulkManageableProfileSection(section = activeProfileSection) {
-        return section === "watchLater" || section === "likes";
+        return section === "watchLater" || section === "likes" || section === "subscriptions";
     }
 
     function profileItemKey(item) {
@@ -2095,11 +2121,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 const key = profileItemKey(item);
                 if (key) profileSelectedItems.set(key, item);
             });
-            renderProfileSectionItems(section, items);
+            rerenderProfileBulkSection(section, items);
         });
         toolbar.querySelector(".profile-bulk-clear")?.addEventListener("click", () => {
             profileSelectedItems.clear();
-            renderProfileSectionItems(section, items);
+            rerenderProfileBulkSection(section, items);
         });
         toolbar.querySelector(".profile-bulk-delete")?.addEventListener("click", () => deleteSelectedProfileItems(section));
     }
@@ -2107,11 +2133,20 @@ document.addEventListener("DOMContentLoaded", () => {
     function toggleProfileBulkMode(section, items = []) {
         profileBulkMode = !profileBulkMode;
         profileSelectedItems.clear();
+        rerenderProfileBulkSection(section, items);
+    }
+
+    function rerenderProfileBulkSection(section, items = []) {
+        if (section === "subscriptions") {
+            renderSubscriptionCreatorStrip(items);
+            return;
+        }
         renderProfileSectionItems(section, items);
     }
 
     function renderProfileSectionItems(section, items = []) {
         if (!profileSectionGrid) return;
+        profileSectionGrid.className = "profile-detail-grid";
         currentProfileSectionItems = Array.isArray(items) ? items : [];
         renderProfileBulkToolbar(section, items);
         profileSectionGrid.innerHTML = "";
@@ -2126,8 +2161,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!isBulkManageableProfileSection(section) || !profileSelectedItems.size || !requireLogin()) return;
         const selected = Array.from(profileSelectedItems.values());
 
-        // 并行发起所有删除请求，加速批量操作
-        const results = await Promise.allSettled(selected.map(item => {
+        const removeOne = item => {
             const target = item.url || item.pageUrl || item.link || "";
             const videoId = item.videoId || videoIdFromUrl(target);
             if (section === "watchLater") {
@@ -2145,8 +2179,13 @@ document.addEventListener("DOMContentLoaded", () => {
                     isFav: true
                 });
             }
-            return Promise.resolve();
-        }));
+            return Promise.reject(new Error("不支持的批量管理板块"));
+        };
+        const results = (section === "watchLater" || section === "likes")
+            ? await Promise.allSettled([postJson("/api/profile/bulk-remove", { section, items: selected })])
+            : section === "subscriptions"
+            ? await Promise.allSettled([postJson("/api/profile/subscriptions/bulk-remove", { creators: selected })])
+            : await runWithConcurrency(selected, PROFILE_BULK_CONCURRENCY, removeOne);
 
         const failed = results
             .map((r, i) => r.status === "rejected" ? (selected[i].title || selected[i].name || selected[i].videoId || "") : null)
@@ -2158,6 +2197,23 @@ document.addEventListener("DOMContentLoaded", () => {
         if (failed.length) {
             alert(`部分删除失败: ${failed.slice(0, 5).join("、")}${failed.length > 5 ? "..." : ""}`);
         }
+    }
+
+    async function runWithConcurrency(items, limit, worker) {
+        const results = new Array(items.length);
+        let cursor = 0;
+        const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+            while (cursor < items.length) {
+                const index = cursor++;
+                try {
+                    results[index] = { status: "fulfilled", value: await worker(items[index]) };
+                } catch (reason) {
+                    results[index] = { status: "rejected", reason };
+                }
+            }
+        });
+        await Promise.all(runners);
+        return results;
     }
 
     function createProfileItemCard(item, bulkSection = "") {
@@ -2249,8 +2305,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (profilePageHeader && user.username) {
                     profilePageHeader.innerHTML = `
                         <img class="profile-page-avatar" src="${imageUrl(user.avatarUrl || "")}" referrerpolicy="no-referrer" alt="avatar">
-                        <div><h1>${escapeHtml(user.username || "个人主页")}</h1><p>稍后观看、喜欢、播放清单、订阅与观看历史</p></div>
+                        <div class="profile-page-user">
+                            <h1>${escapeHtml(user.username || "个人主页")}</h1>
+                            <p>稍后观看、喜欢、播放清单、订阅与观看历史</p>
+                        </div>
+                        <button class="btn-secondary profile-logout-btn" id="profileLogoutBtn" type="button">退出登录</button>
                     `;
+                    profilePageHeader.querySelector("#profileLogoutBtn")?.addEventListener("click", logoutFromProfile);
                 }
             }
         } catch (_error) {}
@@ -2292,7 +2353,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (!response.ok) throw new Error("加载失败");
                 const data = await response.json();
                 container.innerHTML = "";
-                const items = (data.items || []).slice(0, 6);
+                let items = await fetchAllProfilePreviewItems(section, data);
+                if (section === "subscriptions") container.classList.add("subscription-preview-row");
                 if (items.length === 0) {
                     container.innerHTML = `<div class="empty-playlist">暂无内容</div>`;
                 } else {
@@ -2351,7 +2413,10 @@ document.addEventListener("DOMContentLoaded", () => {
         subscriptionCreatorStrip?.classList.add("hidden");
         profilePageHeader?.classList.add("hidden");
         if (profilePaginationBar) profilePaginationBar.classList.remove("hidden");
-        if (profileSectionGrid) profileSectionGrid.innerHTML = `<div class="empty-playlist">正在载入...</div>`;
+        if (profileSectionGrid) {
+            profileSectionGrid.className = "profile-detail-grid";
+            profileSectionGrid.innerHTML = `<div class="empty-playlist">正在载入...</div>`;
+        }
         profileBulkMode = false;
         profileSelectedItems.clear();
         let lastError = null;
@@ -2409,27 +2474,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const resp = await fetch("/api/profile/section/subscriptions?page=1");
             if (!resp.ok) throw new Error(await resp.text() || "载入失败");
             const data = await resp.json();
-            let creators = [...(data.items || [])];
-            const totalPages = Number(data.totalPages || 1);
-
-            if (totalPages > 1) {
-                for (let p = 2; p <= totalPages; p++) {
-                    const r = await fetch(`/api/profile/section/subscriptions?page=${p}`);
-                    if (r.ok) {
-                        const d = await r.json();
-                        (d.items || []).forEach(c => {
-                            if (!creators.some(e => (e.searchQuery || e.name) === (c.searchQuery || c.name))) {
-                                creators.push(c);
-                            }
-                        });
-                    }
-                }
-            }
+            const creators = await fetchAllSubscriptionCreators(data);
 
             lsSet(LS_SUB_CREATORS_KEY, creators);
 
             // Only re-render if no cached version was shown; otherwise silently update avatars
-            if (!cachedCreators) {
+            if (!cachedCreators || creators.length !== cachedCreators.length) {
                 renderSubscriptionCreatorStrip(creators, preSelectKey);
                 const target = preSelectKey
                     ? (creators.find(c => (c.searchQuery || c.name) === preSelectKey) || creators[0])
@@ -2443,6 +2493,40 @@ document.addEventListener("DOMContentLoaded", () => {
                 subscriptionCreatorStrip.innerHTML = `<div class="empty-playlist" style="width:100%">载入失败: ${escapeHtml(err.message)}</div>`;
             }
         }
+    }
+
+    async function fetchAllSubscriptionCreators(firstPage) {
+        const creators = [...(firstPage.items || [])];
+        const totalPages = Number(firstPage.totalPages || 1);
+        const pages = await Promise.all(Array.from({ length: Math.max(totalPages - 1, 0) }, (_, index) =>
+            fetch(`/api/profile/section/subscriptions?page=${index + 2}`).then(async response => {
+                if (!response.ok) throw new Error(await response.text() || "订阅载入失败");
+                return response.json();
+            })
+        ));
+        pages.forEach(page => (page.items || []).forEach(creator => {
+            if (!creators.some(existing => (existing.searchQuery || existing.name) === (creator.searchQuery || creator.name))) {
+                creators.push(creator);
+            }
+        }));
+        return creators;
+    }
+
+    async function fetchAllProfilePreviewItems(section, firstPage) {
+        if (section === "subscriptions") return fetchAllSubscriptionCreators(firstPage);
+        const items = [...(firstPage.items || [])];
+        const totalPages = Number(firstPage.totalPages || 1);
+        const pages = await Promise.all(Array.from({ length: Math.max(totalPages - 1, 0) }, (_, index) =>
+            fetch(`/api/profile/section/${encodeURIComponent(section)}?page=${index + 2}`).then(async response => {
+                if (!response.ok) throw new Error(await response.text() || "内容载入失败");
+                return response.json();
+            })
+        ));
+        pages.forEach(page => (page.items || []).forEach(item => {
+            const key = profileItemKey(item);
+            if (!items.some(existing => profileItemKey(existing) === key)) items.push(item);
+        }));
+        return items;
     }
 
     function updateSubscriptionCreatorAvatars(freshCreators) {
@@ -2477,13 +2561,25 @@ document.addEventListener("DOMContentLoaded", () => {
             const chip = document.createElement("button");
             chip.type = "button";
             chip.className = "sub-creator-chip" + (isActive ? " active" : "");
+            const key = creator.searchQuery || creator.name || "";
+            if (profileBulkMode) {
+                chip.classList.add("profile-bulk-creator");
+                if (profileSelectedItems.has(key)) chip.classList.add("selected");
+            }
             chip.dataset.searchQuery = creator.searchQuery || creator.name || "";
             const initial = (creator.name || "?").charAt(0).toUpperCase();
             const buildAvatarHtml = (avatarUrl) => avatarUrl
                 ? `<img class="sub-creator-chip-avatar" src="${imageUrl(avatarUrl)}" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy" alt="${escapeHtml(creator.name || "")}"><span class="sub-creator-chip-initial" style="display:none">${escapeHtml(initial)}</span>`
                 : `<span class="sub-creator-chip-initial">${escapeHtml(initial)}</span>`;
-            chip.innerHTML = `${buildAvatarHtml(creator.avatarUrl)}<span class="sub-creator-chip-name">${escapeHtml(creator.name || "未知")}</span>`;
-            chip.addEventListener("click", () => loadSubscriptionCreatorVideos(creator));
+            chip.innerHTML = `${profileBulkMode ? `<span class="profile-bulk-creator-check">${profileSelectedItems.has(key) ? "✓" : ""}</span>` : ""}${buildAvatarHtml(creator.avatarUrl)}<span class="sub-creator-chip-name">${escapeHtml(creator.name || "未知")}</span>`;
+            chip.addEventListener("click", () => {
+                if (profileBulkMode) {
+                    if (profileSelectedItems.has(key)) profileSelectedItems.delete(key); else profileSelectedItems.set(key, creator);
+                    renderSubscriptionCreatorStrip(creators, selectedQuery);
+                    return;
+                }
+                loadSubscriptionCreatorVideos(creator);
+            });
             subscriptionCreatorStrip.appendChild(chip);
 
             // Lazily fetch avatar if not yet available
@@ -2552,7 +2648,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             profileSectionGrid.innerHTML = "";
-            profileSectionGrid.className = "profile-preview-row";
+            profileSectionGrid.className = "profile-detail-grid";
             const items = data.videos || data.items || [];
             if (!items.length) {
                 profileSectionGrid.innerHTML = `<div class="empty-playlist">暂无作品</div>`;
@@ -2609,8 +2705,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ---- Navigation / SPA Routing ----
     function switchView(viewId, pushState = true) {
+        const previousView = currentView;
         if (currentView === "viewBrowse" && viewId !== "viewBrowse") {
             rememberCurrentPageScroll();
+        }
+        if (previousView === "viewParser" && viewId !== "viewParser") {
+            stopDetailMediaPlayback();
         }
         currentView = viewId;
         viewLanding.classList.add("hidden");
@@ -2620,12 +2720,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
         document.getElementById(viewId).classList.remove("hidden");
         
-        // cleanup player if switching away from parser
-        if (viewId !== "viewParser" && hlsInstance) {
-            hlsInstance.destroy();
-            videoPlayer.pause();
-        }
-
         if (pushState) {
             history.pushState({ view: viewId }, "", `#${viewId}`);
         }
@@ -3036,7 +3130,7 @@ document.addEventListener("DOMContentLoaded", () => {
         submitLoginBtn.textContent = "登录中…";
         loginError.style.display = "none";
         try {
-            const res = await fetch("/api/login", {
+            const res = await fetch("/api/auth/login", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ email, password }),
@@ -3081,6 +3175,18 @@ document.addEventListener("DOMContentLoaded", () => {
             logoutBtn.disabled = false;
         }
     });
+
+    async function logoutFromProfile() {
+        const confirmed = window.confirm("确定要退出当前账号吗？");
+        if (!confirmed) return;
+        await fetch("/api/auth/logout", { method: "POST" });
+        authState = { loggedIn: false, username: "", avatarUrl: "", userId: "" };
+        isLoggedIn = false;
+        syncAuthHeader();
+        loginBtn.textContent = "👤";
+        loginBtn.title = "登录账号";
+        switchView("viewLanding", true);
+    }
 
     refreshLoginStatus();
     restorePageCacheFromBackend();
@@ -3375,18 +3481,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     closePlayerBtn.addEventListener("click", () => {
-        if(hlsInstance) {
-            hlsInstance.destroy();
-            hlsInstance = null;
-        }
-        videoPlayer.pause();
-        videoPlayer.onerror = null;
-        delete videoPlayer.dataset.src;
-        videoPlayer.removeAttribute("src");
-        videoPlayer.load();
-        playerWrapper.classList.add("hidden");
-        playerWrapper.classList.remove("preloading");
-        coverWrapper.classList.remove("hidden");
+        stopDetailMediaPlayback();
     });
 
     // ---- Parse Flow ----
@@ -3398,13 +3493,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (resetLog) logConsole.innerHTML = "";
         
         // reset player state
-        if(hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-        videoPlayer.pause();
-        videoPlayer.removeAttribute("src");
-        videoPlayer.load();
-        playerWrapper.classList.add("hidden");
-        playerWrapper.classList.remove("preloading");
-        coverWrapper.classList.remove("hidden");
+        stopDetailMediaPlayback();
         currentVideoData = null;
         currentRawVideoUrl = "";
         currentVideoUrl = "";
@@ -3677,6 +3766,12 @@ document.addEventListener("DOMContentLoaded", () => {
         navigator.clipboard.writeText(currentRawVideoUrl).then(() => {
             log("链接萃取复制完毕", "info");
         });
+    });
+
+    comicOriginalBtn?.addEventListener("click", () => {
+        const comicUrl = currentVideoData?.comicOriginal?.url || "";
+        if (!comicUrl) return;
+        window.open(comicUrl, "_blank", "noopener,noreferrer");
     });
 
     if (toggleSearchBtn && searchHeader) {

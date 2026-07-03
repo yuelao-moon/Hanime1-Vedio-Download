@@ -43,13 +43,22 @@ class BrowserCookieCollector:
                 raise RuntimeError(f"无法启动 Cookie 抓取浏览器: {last_error}") from last_error
 
             page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+            user_agent = await page.evaluate("navigator.userAgent")
+            existing = await try_validate_existing_browser_cookies(
+                self._context,
+                self.home,
+                user_agent=user_agent,
+                validate=validate,
+                reload_session=reload_session,
+            )
+            if existing:
+                return existing
             try:
-                await page.goto(HANIME_ORIGIN + "/", wait_until="domcontentloaded", timeout=60000)
+                await page.goto(HANIME_ORIGIN + "/", wait_until="domcontentloaded", timeout=20000)
             except Exception:
                 # Cloudflare managed challenges can keep navigation pending while
                 # the browser is still usable. Keep the window open for the user.
                 pass
-            user_agent = await page.evaluate("navigator.userAgent")
             return await wait_for_valid_cookie_session(
                 self._context,
                 self.home,
@@ -95,6 +104,16 @@ class CookieRefreshManager:
     async def refresh(self) -> dict:
         async with self._lock:
             reload_session = getattr(self.scraper, "reload_cookie_session", None)
+            if reload_session:
+                reload_session()
+            if await self.scraper.validate_cookie_session():
+                return {
+                    "ok": True,
+                    "valid": True,
+                    "refreshed": False,
+                    "skipped": True,
+                    **self.status(),
+                }
             result = await self.collector.refresh(
                 validate=self.scraper.validate_cookie_session,
                 reload_session=reload_session,
@@ -130,6 +149,34 @@ async def wait_for_cf_cookie(context, timeout_seconds: int) -> None:
     raise RuntimeError("未能在限定时间内抓取到 cf_clearance Cookie")
 
 
+async def try_validate_existing_browser_cookies(
+    context,
+    home: Path,
+    *,
+    user_agent: str | None,
+    validate=None,
+    reload_session=None,
+) -> dict | None:
+    cookies = await context.cookies(HANIME_ORIGIN)
+    cf_count = sum(1 for cookie in cookies if cookie.get("name") == "cf_clearance")
+    if not cookies or not cf_count:
+        return None
+    save_cookies(cookies, home, user_agent=user_agent)
+    if reload_session:
+        reload_session()
+    if validate is not None and not await validate():
+        return None
+    return {
+        "ok": True,
+        "valid": True,
+        "refreshed": True,
+        "fromBrowserCache": True,
+        "cookieCount": len(cookies),
+        "hasCfClearance": True,
+        "cfClearanceCount": cf_count,
+    }
+
+
 async def wait_for_valid_cookie_session(
     context,
     home: Path,
@@ -159,7 +206,7 @@ async def wait_for_valid_cookie_session(
                     "hasCfClearance": True,
                     "cfClearanceCount": last_cf_count,
                 }
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.25)
     raise RuntimeError(
         f"未能在限定时间内抓取到可通过 HTTP 验证的 Cookie"
         f"（已缓存 {last_cookie_count} 个，cf_clearance: {last_cf_count}）"

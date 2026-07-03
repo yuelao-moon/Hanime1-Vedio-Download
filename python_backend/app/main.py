@@ -19,6 +19,7 @@ from .scraper import HanimeScraper, LoginError, SessionBlockedError
 from .settings import AppSettings, SettingsStore
 from .local_db import LocalStore
 from .cookie_refresh import CookieRefreshManager
+from .account import HanimeAccountClient
 
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,8 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
     home = resolve_app_home(app_home)
     settings_store = SettingsStore(home)
     scraper = scraper or HanimeScraper(home=home, settings_provider=settings_store.load)
+    if account_client is None and hasattr(scraper, "account_session"):
+        account_client = HanimeAccountClient(scraper.account_session)
     if cookie_manager is None and hasattr(scraper, "validate_cookie_session") and hasattr(scraper, "reload_cookie_session"):
         cookie_manager = CookieRefreshManager(home, scraper=scraper)
     local_store = LocalStore(home)
@@ -153,24 +156,37 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
         if not email or not password:
             raise HTTPException(status_code=400, detail="邮箱和密码不能为空")
         if account_client is not None and hasattr(account_client, "login"):
-            result = await account_client.login(email, password)
+            try:
+                result = await account_client.login(email, password)
+            except ValueError as exc:
+                raise HTTPException(status_code=401, detail=str(exc)) from exc
             # 登录成功后让 scraper 重新加载 cookie，保持 cookie jar 同步
             reload = getattr(scraper, "reload_cookie_session", None)
             if reload:
                 reload()
+            reload_account = getattr(scraper, "reload_account_session", None)
+            if reload_account:
+                reload_account()
             return result
         return await scraper.login(email, password)
 
     @app.get("/api/auth/me")
     async def auth_me():
         if account_client is not None and hasattr(account_client, "me"):
-            return await account_client.me()
+            try:
+                return await account_client.me()
+            except Exception as exc:
+                log.debug("账号状态读取失败，回退到 scraper 会话: %s", exc)
         return await scraper.get_login_status()
 
     @app.post("/api/auth/logout")
     async def auth_logout():
         if account_client is not None and hasattr(account_client, "logout"):
-            return await account_client.logout()
+            result = await account_client.logout()
+            logout_scraper = getattr(scraper, "logout", None)
+            if logout_scraper:
+                await logout_scraper()
+            return result
         return await scraper.logout()
 
     @app.get("/api/comments")
@@ -420,6 +436,100 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
             "subscribe-status": "1" if is_subscribed else "",
         })
 
+    @app.post("/api/profile/subscriptions/bulk-remove")
+    async def bulk_remove_subscriptions(payload: dict):
+        creators = payload.get("creators") or []
+        if not isinstance(creators, list) or not creators:
+            raise HTTPException(status_code=400, detail="至少需要一个订阅作者")
+        from urllib.parse import urlencode
+        from .parser import extract_video_page, parse_video_grid
+
+        async def remove_one(creator: dict) -> dict:
+            query = str(creator.get("searchQuery") or creator.get("name") or "").strip()
+            if not query:
+                raise ValueError("缺少作者名称")
+            search_html = await scraper.fetch_html(
+                f"https://hanime1.me/search?{urlencode({'query': query, 'page': 1})}",
+                "https://hanime1.me/",
+            )
+            video_url = next((item.get("url") for item in parse_video_grid(search_html) if item.get("url")), "")
+            if not video_url:
+                raise ValueError(f"无法定位作者 {query} 的作品")
+            parsed = extract_video_page(video_url, await scraper.fetch_html(video_url, "https://hanime1.me/"))
+            post = ((parsed.get("creator") or {}).get("post") or {})
+            token = require_text(parsed, "csrfToken", "缺少 CSRF token")
+            await scraper.post_form("https://hanime1.me/subscribe", {
+                "_token": token,
+                "subscribe-user-id": require_text(post, "userId", "缺少用户 ID"),
+                "subscribe-artist-id": require_text(post, "artistId", "缺少作者 ID"),
+                "subscribe-status": "1",
+            })
+            return {"name": query, "ok": True}
+
+        semaphore = asyncio.Semaphore(3)
+        async def bounded(creator: dict) -> dict:
+            async with semaphore:
+                try:
+                    return await remove_one(creator)
+                except Exception as exc:
+                    return {"name": str(creator.get("name") or creator.get("searchQuery") or ""), "ok": False, "error": str(exc)}
+
+        results = await asyncio.gather(*(bounded(creator) for creator in creators))
+        failed = [result for result in results if not result["ok"]]
+        if not failed:
+            html_cache = getattr(scraper, "_html_cache", None)
+            if isinstance(html_cache, dict):
+                for key in list(html_cache):
+                    if "/subscriptions" in key[0]:
+                        html_cache.pop(key, None)
+        return {"results": results, "failed": failed}
+
+    @app.post("/api/profile/bulk-remove")
+    async def bulk_remove_profile_items(payload: dict):
+        section = str(payload.get("section") or "")
+        items = payload.get("items") or []
+        if section not in {"watchLater", "likes"} or not isinstance(items, list) or not items:
+            raise HTTPException(status_code=400, detail="无效的批量删除请求")
+        first_url = str((items[0] or {}).get("url") or (items[0] or {}).get("pageUrl") or "")
+        if not first_url:
+            raise HTTPException(status_code=400, detail="缺少视频链接")
+        context = await scraper.parse(first_url)
+        token = require_text(context, "csrfToken", "缺少 CSRF token")
+        user_id = str(context.get("currentUserId") or "")
+        if not user_id:
+            auth = await auth_me()
+            user_id = str(auth.get("userId") or "")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="缺少用户 ID")
+        list_code = str(((context.get("myList") or {}).get("watchLaterCode") or "WL"))
+
+        async def remove_one(item: dict) -> dict:
+            video_id = str(item.get("videoId") or "")
+            if not video_id:
+                from .parser import extract_video_id
+                video_id = extract_video_id(str(item.get("url") or item.get("pageUrl") or ""))
+            if not video_id:
+                raise ValueError("缺少视频 ID")
+            if section == "watchLater":
+                await scraper.post_form("https://hanime1.me/save", {"_token": token, "input_id": list_code, "video_id": video_id, "is_checked": "false", "user_id": user_id})
+            else:
+                await scraper.post_form("https://hanime1.me/like", {"_token": token, "like-foreign-id": video_id, "like-status": "1", "like-user-id": user_id, "like-is-positive": "1"})
+            return {"videoId": video_id, "ok": True}
+
+        # Parsing pages concurrently triggered Cloudflare.  These requests reuse
+        # one verified CSRF context, so a small submission pool improves latency
+        # without returning to the burst that caused the original failures.
+        semaphore = asyncio.Semaphore(2)
+        async def bounded(item: dict) -> dict:
+            async with semaphore:
+                try:
+                    return await remove_one(item)
+                except Exception as exc:
+                    return {"videoId": str(item.get("videoId") or ""), "ok": False, "error": str(exc)}
+        results = await asyncio.gather(*(bounded(item) for item in items))
+        clear_profile_section_cache(scraper, user_id, section)
+        return {"results": results, "failed": [result for result in results if not result["ok"]]}
+
     @app.get("/api/profile/summary")
     async def profile_summary():
         user = await auth_me()
@@ -549,11 +659,14 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
 
     @app.get("/api/proxy/video")
     async def proxy_video(url: str, request: Request):
-        body, status_code, content_type, response_headers = await scraper.stream_bytes(
-            url,
-            "https://hanime1.me/",
-            request.headers.get("range"),
-        )
+        try:
+            body, status_code, content_type, response_headers = await scraper.stream_bytes(
+                url,
+                "https://hanime1.me/",
+                request.headers.get("range"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         response_headers["Cache-Control"] = "public, max-age=300"
         return StreamingResponse(body, status_code=status_code, media_type=content_type, headers=response_headers)
 

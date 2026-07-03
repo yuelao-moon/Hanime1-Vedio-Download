@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+import ipaddress
 import json
 import re
+import socket
 import time
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.parse import urlencode
 
 import httpx
@@ -35,6 +37,7 @@ PROFILE_SECTION_TITLES = {
     "subscriptions": "我的订阅",
     "histories": "观看历史",
 }
+TRUSTED_MEDIA_HOSTS = ("hanime1.me", "hembed.com")
 
 
 class SessionBlockedError(RuntimeError):
@@ -45,10 +48,55 @@ class LoginError(RuntimeError):
     pass
 
 
+def parse_media_url(url: str):
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("视频代理只接受有效的 HTTP(S) 地址")
+    if parsed.username or parsed.password:
+        raise ValueError("视频代理地址不能包含用户凭据")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        return parsed
+    if not address.is_global:
+        raise ValueError("视频代理不允许访问本地或私有网络地址")
+    return parsed
+
+
+def is_trusted_media_host(hostname: str) -> bool:
+    host = (hostname or "").lower().rstrip(".")
+    return any(host == suffix or host.endswith(f".{suffix}") for suffix in TRUSTED_MEDIA_HOSTS)
+
+
+async def validate_public_media_url(url: str) -> None:
+    parsed = parse_media_url(url)
+    # Hembed is the video CDN currently emitted by the source site.  Some
+    # networks map it to the reserved 198.18.0.0/15 range, which is not
+    # globally-routable by ipaddress even though it is the intended CDN route.
+    # Keep that exception narrowly scoped to the explicit media allowlist.
+    if is_trusted_media_host(parsed.hostname):
+        return
+    try:
+        records = await asyncio.get_running_loop().getaddrinfo(
+            parsed.hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError("无法解析视频代理地址") from exc
+    addresses = {record[4][0] for record in records}
+    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise ValueError("视频代理不允许访问本地或私有网络地址")
+
+
 class HanimeScraper:
-    def __init__(self, client: httpx.AsyncClient | None = None, home=None, settings_provider=None, account_session: AccountSession | None = None):
+    def __init__(self, client: httpx.AsyncClient | None = None, media_client: httpx.AsyncClient | None = None, home=None, settings_provider=None, account_session: AccountSession | None = None):
         self.client = client or httpx.AsyncClient(timeout=30, follow_redirects=True, headers=DEFAULT_HEADERS)
         self._owns_client = client is None
+        # Media URLs can point at third-party CDNs. Keep this client separate so
+        # account and Cloudflare cookies are never sent outside hanime1.me.
+        self.media_client = media_client or httpx.AsyncClient(timeout=30, follow_redirects=False, headers=DEFAULT_HEADERS)
+        self._owns_media_client = media_client is None
         self.home = app_home(home)
         self.settings_provider = settings_provider or AppSettings
         self.account_session = account_session or AccountSession(self.home)
@@ -357,8 +405,22 @@ class HanimeScraper:
         headers = referer_header(referer)
         if range_header:
             headers["Range"] = range_header
-        request = self.client.build_request("GET", url, headers=headers)
-        response = await self.client.send(request, stream=True, follow_redirects=True)
+        current_url = url
+        response = None
+        for _ in range(6):
+            await validate_public_media_url(current_url)
+            request = self.media_client.build_request("GET", current_url, headers=headers)
+            response = await self.media_client.send(request, stream=True)
+            if response.status_code not in {301, 302, 303, 307, 308}:
+                break
+            location = response.headers.get("location")
+            await response.aclose()
+            if not location:
+                raise ValueError("视频代理重定向地址无效")
+            current_url = urljoin(current_url, location)
+        else:
+            raise ValueError("视频代理重定向次数过多")
+        assert response is not None
 
         async def body() -> AsyncIterator[bytes]:
             try:
@@ -610,6 +672,11 @@ class HanimeScraper:
         self._html_cache.clear()
         self._http_blocked_until.clear()
 
+    def reload_account_session(self) -> None:
+        self._apply_login_cookies_to_client()
+        self._authenticated = self.account_session.is_logged_in()
+        self._html_cache.clear()
+
     async def validate_cookie_session(self) -> bool:
         try:
             response = await self._request_http("GET", "https://hanime1.me/", headers=referer_header("https://hanime1.me/"))
@@ -619,14 +686,18 @@ class HanimeScraper:
                 return False
             return usable_response(response) and looks_like_hanime_content(response.text)
         except Exception as exc:
-            # 网络错误不代表 cookie 失效，保守地认为仍然有效，避免不必要的浏览器刷新
+            # A request that could not be completed is not evidence of a valid
+            # cookie session.  Returning True here skips the only refresh path
+            # and leaves the user with a later, opaque 503 from browse/parse.
             import logging
-            logging.getLogger(__name__).debug("Cookie 验证请求失败（按有效处理）: %s", exc)
-            return True
+            logging.getLogger(__name__).debug("Cookie 验证请求失败（按未验证处理）: %s", exc)
+            return False
 
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
+        if self._owns_media_client:
+            await self.media_client.aclose()
 
 
 def parse_comments(html: str) -> list[dict]:

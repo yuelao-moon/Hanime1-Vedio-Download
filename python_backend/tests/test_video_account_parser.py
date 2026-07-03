@@ -48,6 +48,26 @@ def test_extract_video_page_includes_account_action_fields():
     }
 
 
+def test_extract_video_page_includes_comic_original_link():
+    html = """
+    <html>
+      <body>
+        <h1 id="shareBtn-title">Example Title</h1>
+        <a class="video-show-action-btn video-comic-btn" href="https://hanimeone.me/comic/81505" target="_blank">
+          <i class="material-icons-outlined">import_contacts</i>漫画原作
+        </a>
+      </body>
+    </html>
+    """
+
+    result = extract_video_page("https://hanime1.me/watch?v=39123", html)
+
+    assert result["comicOriginal"] == {
+        "title": "漫画原作",
+        "url": "https://hanimeone.me/comic/81505",
+    }
+
+
 def test_extract_video_page_prefers_subscribe_artist_avatar_over_first_user_link():
     html = """
     <html>

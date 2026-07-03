@@ -57,6 +57,21 @@ def test_frontend_video_player_uses_direct_media_url():
     assert 'videoPlayer.referrerPolicy = "no-referrer"' in app_js
 
 
+def test_frontend_stops_detail_media_when_leaving_parser_view():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
+
+    assert "function stopDetailMediaPlayback()" in app_js
+    assert 'previousView === "viewParser" && viewId !== "viewParser"' in app_js
+    assert "stopDetailMediaPlayback();" in app_js
+    stop_block = app_js[
+        app_js.index("function stopDetailMediaPlayback()"):
+        app_js.index("function normalizeSearchState")
+    ]
+    assert "videoPlayer.pause();" in stop_block
+    assert 'videoPlayer.removeAttribute("src");' in stop_block
+    assert "hlsInstance.destroy();" in stop_block
+
+
 def test_profile_watch_later_and_likes_have_bulk_delete_controls():
     app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
 
@@ -68,10 +83,32 @@ def test_profile_watch_later_and_likes_have_bulk_delete_controls():
     assert "likes" in app_js
 
 
+def test_frontend_uses_auth_login_and_profile_logout_button():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
+    index_html = Path("src/main/resources/static/index.html").read_text(encoding="utf-8")
+
+    assert 'fetch("/api/auth/login"' in app_js
+    assert 'fetch("/api/login"' not in app_js
+    assert "profileLogoutBtn" in app_js
+    assert "logoutFromProfile" in app_js
+    assert "退出登录" in app_js
+    assert "profilePageHeader" in index_html
+
+
+def test_frontend_supports_comic_original_detail_button():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
+    index_html = Path("src/main/resources/static/index.html").read_text(encoding="utf-8")
+
+    assert 'id="comicOriginalBtn"' in index_html
+    assert "comicOriginalBtn" in app_js
+    assert "currentVideoData.comicOriginal?.url" in app_js
+    assert 'window.open(comicUrl, "_blank", "noopener,noreferrer")' in app_js
+
+
 def test_profile_likes_bulk_delete_sends_current_liked_state():
     app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
 
-    likes_branch = app_js[app_js.index('section === "likes"'):app_js.index("return Promise.resolve();")]
+    likes_branch = app_js[app_js.index('section === "likes"'):app_js.index("const results = (section === \"watchLater\"")]
     assert "/api/video/favorite" in likes_branch
     assert "isFav: true" in likes_branch
     assert "isFav: false" not in likes_branch

@@ -55,12 +55,14 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
     like_status = attr(tree.css_first("[name='like-status'], [name=like-status]"), "value")
     unlike_status = attr(tree.css_first("[name='unlike-status'], [name=unlike-status]"), "value")
     my_list = extract_my_list(tree)
+    comic_original = extract_comic_original(tree, page_url)
 
     result = {
         "videoUrl": clean_url(video_url),
         "title": normalize_title(extract_title(tree)),
         "thumbnail": extract_thumbnail(tree, page_url),
         "videoId": extract_video_id(page_url),
+        "comicOriginal": comic_original,
         "playlist": extract_cards(tree.css("#video-playlist-wrapper a[href*='watch?v=']"), page_url),
         "relatedVideos": extract_related_videos(tree, page_url),
         "creator": {
@@ -122,6 +124,23 @@ def extract_my_list(tree: HTMLParser) -> dict:
         "watchLaterCode": attr(watch_later_input, "id") or "WL",
         "items": items,
     }
+
+
+def extract_comic_original(tree: HTMLParser, page_url: str) -> dict | None:
+    for node in tree.css("a.video-comic-btn, a[href*='hanimeone.me/comic/'], a[href*='/comic/']"):
+        href = clean_url(node.attributes.get("href", ""))
+        text = re.sub(r"\s+", " ", node.text(strip=True) or "").replace("import_contacts", "").strip()
+        compact_text = re.sub(r"\s+", "", text)
+        classes = node.attributes.get("class", "")
+        if not href:
+            continue
+        if "video-comic-btn" not in classes and not any(marker in compact_text for marker in ("漫画原作", "漫畫原作", "原作")):
+            continue
+        return {
+            "title": text or "漫画原作",
+            "url": urljoin(page_url if page_url.startswith("http") else BASE_URL, href),
+        }
+    return None
 
 
 def extract_creator_post(tree: HTMLParser) -> dict | None:

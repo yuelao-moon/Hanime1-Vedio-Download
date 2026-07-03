@@ -4,6 +4,7 @@ import pytest
 
 from python_backend.app.cookie_refresh import CookieRefreshManager
 from python_backend.app.cookie_refresh import BrowserCookieCollector
+from python_backend.app.scraper import HanimeScraper
 
 
 class FakeScraper:
@@ -17,6 +18,9 @@ class FakeScraper:
         if self.blocked_once and self.calls == 1:
             return False
         return True
+
+    def reload_cookie_session(self) -> None:
+        pass
 
 
 class FakeCollector:
@@ -56,6 +60,20 @@ async def test_cookie_refresh_manager_opens_browser_when_cookie_invalid(tmp_path
     assert result["refreshed"] is True
     assert collector.calls == 1
     assert scraper.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_cookie_refresh_route_skips_browser_when_cookie_already_valid(tmp_path):
+    scraper = FakeScraper(blocked_once=False)
+    collector = FakeCollector()
+    manager = CookieRefreshManager(tmp_path, scraper=scraper, collector=collector)
+
+    result = await manager.refresh()
+
+    assert result["valid"] is True
+    assert result["refreshed"] is False
+    assert result["skipped"] is True
+    assert collector.calls == 0
 
 
 class TimeoutPage:
@@ -166,3 +184,16 @@ async def test_browser_cookie_collector_keeps_browser_open_until_http_validation
     assert validate_calls == 3
     assert reload_calls >= 3
     assert context.closed is True
+
+
+@pytest.mark.asyncio
+async def test_cookie_validation_does_not_treat_network_errors_as_valid(tmp_path):
+    class FailingClient:
+        async def request(self, *_args, **_kwargs):
+            raise OSError("network unavailable")
+
+    scraper = HanimeScraper(client=FailingClient(), home=tmp_path)
+    try:
+        assert await scraper.validate_cookie_session() is False
+    finally:
+        await scraper.close()

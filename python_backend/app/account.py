@@ -139,13 +139,15 @@ class HanimeAccountClient:
             raise ValueError("curl_cffi 未安装，请先安装后再登录")
 
         cf_cookies = self._build_cf_cookies()
-        impersonate = self._impersonate()
+        ua = load_user_agent(self.session.home) or ""
+        impersonate = "chrome124"
 
         async with CurlSession(impersonate=impersonate, timeout=30) as client:
             # 步骤 1：GET /login，带 CF cookies，让 curl_cffi 用 Chrome TLS 指纹
             login_page = await client.get(
                 HANIME_ORIGIN + "/login",
                 cookies=cf_cookies,
+                headers={"User-Agent": ua, "Referer": HANIME_ORIGIN + "/"},
                 allow_redirects=True,
             )
             if login_page.status_code != 200:
@@ -161,9 +163,12 @@ class HanimeAccountClient:
             response = await client.post(
                 HANIME_ORIGIN + "/login",
                 data={"_token": token, "email": email, "password": password},
+                cookies=cf_cookies,
                 headers={
+                    "User-Agent": ua,
                     "X-CSRF-TOKEN": token,
                     "Referer": HANIME_ORIGIN + "/login",
+                    "Origin": HANIME_ORIGIN,
                 },
                 allow_redirects=False,
             )
@@ -206,13 +211,14 @@ class HanimeAccountClient:
         cf_cookies = self._build_cf_cookies()
         login_cookies = self.session.load_login_cookies()
         all_cookies = {**cf_cookies, **login_cookies}
-        impersonate = self._impersonate()
+        ua = load_user_agent(self.session.home) or ""
+        impersonate = "chrome124"
 
         async with CurlSession(impersonate=impersonate, timeout=30) as client:
             response = await client.get(
                 HANIME_ORIGIN + "/",
                 cookies=all_cookies,
-                headers={"Referer": HANIME_ORIGIN + "/"},
+                headers={"User-Agent": ua, "Referer": HANIME_ORIGIN + "/"},
             )
             response.raise_for_status()
             return parse_home_user(response.text)
