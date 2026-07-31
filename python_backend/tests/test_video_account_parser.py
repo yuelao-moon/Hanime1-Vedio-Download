@@ -68,6 +68,96 @@ def test_extract_video_page_includes_comic_original_link():
     }
 
 
+def test_extract_video_page_reads_new_sidebar_playlist_layout():
+    html = """
+    <html>
+      <body>
+        <h1 id="shareBtn-title">關於同組的染谷同學是性感女優這件事。 4</h1>
+        <meta property="og:image" content="https://img.test/current.jpg">
+        <div class="right-sidebar-sticky no-scrollbar-style">
+          <div class="hidden-xs hidden-sm desktop-playlist-flex">
+            <div class="video-playlist-wrapper">
+              <div id="playlist-scroll" class="playlist-scroll-node hover-video-playlist">
+                <div class="playlist-hover-wrap clickable-row videos-scroll" data-href="https://hanime1.me/watch?v=407444">
+                  <div class="playlist-video-card video-item-container no-select">
+                    <div class="video-thumb-container horizontal-card">
+                      <div class="thumb-container">
+                        <a href="https://hanime1.me/watch?v=407444">
+                          <img class="main-thumb" src="https://vdownload.hembed.com/image/thumbnail/407444l.jpg">
+                          <div class="duration">06:39</div>
+                          <div class="stats-container">
+                            <div class="stat-item"><i class="material-icons">thumb_up</i> 99%</div>
+                            <div class="stat-item">2.6万次</div>
+                          </div>
+                        </a>
+                      </div>
+                    </div>
+                    <div class="video-info-container">
+                      <h4 class="video-title"><a href="https://hanime1.me/watch?v=407444">關於同組的染谷同學是性感女優這件事。 4</a></h4>
+                    </div>
+                  </div>
+                </div>
+                <div class="playlist-hover-wrap clickable-row" data-href="https://hanime1.me/watch?v=407325">
+                  <div class="playlist-video-card video-item-container no-select">
+                    <div class="video-thumb-container horizontal-card">
+                      <div class="thumb-container">
+                        <a href="https://hanime1.me/watch?v=407325">
+                          <img class="main-thumb" src="https://vdownload.hembed.com/image/thumbnail/407325l.jpg">
+                          <div class="duration">06:41</div>
+                        </a>
+                      </div>
+                    </div>
+                    <div class="video-info-container">
+                      <h4 class="video-title"><a href="https://hanime1.me/watch?v=407325">關於同組的染谷同學是性感女優這件事。 3</a></h4>
+                    </div>
+                  </div>
+                </div>
+                <div class="playlist-hover-wrap clickable-row" data-href="https://hanime1.me/watch?v=407315">
+                  <div class="playlist-video-card video-item-container no-select">
+                    <div class="video-thumb-container horizontal-card">
+                      <div class="thumb-container">
+                        <a href="https://hanime1.me/watch?v=407315">
+                          <img class="main-thumb" src="https://vdownload.hembed.com/image/thumbnail/407315l.jpg">
+                        </a>
+                      </div>
+                    </div>
+                    <div class="video-info-container">
+                      <h4 class="video-title"><a href="https://hanime1.me/watch?v=407315">關於同組的染谷同學是性感女優這件事。 2</a></h4>
+                    </div>
+                  </div>
+                </div>
+                <div class="playlist-hover-wrap clickable-row" data-href="https://hanime1.me/watch?v=407103">
+                  <div class="playlist-video-card video-item-container no-select">
+                    <div class="video-thumb-container horizontal-card">
+                      <div class="thumb-container">
+                        <a href="https://hanime1.me/watch?v=407103">
+                          <img class="main-thumb" src="https://vdownload.hembed.com/image/thumbnail/407103l.jpg">
+                        </a>
+                      </div>
+                    </div>
+                    <div class="video-info-container">
+                      <h4 class="video-title"><a href="https://hanime1.me/watch?v=407103">關於同組的染谷同學是性感女優這件事。 1</a></h4>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    result = extract_video_page("https://hanime1.me/watch?v=407444", html)
+
+    assert [item["videoId"] for item in result["playlist"]] == ["407444", "407325", "407315", "407103"]
+    assert result["playlist"][0]["title"] == "關於同組的染谷同學是性感女優這件事。 4"
+    assert result["playlist"][0]["thumbnail"] == "https://vdownload.hembed.com/image/thumbnail/407444l.jpg"
+    assert result["playlist"][0]["duration"] == "06:39"
+    assert result["playlist"][0]["likes"] == "99%"
+    assert result["playlist"][0]["views"] == "2.6万次"
+
+
 def test_extract_video_page_prefers_subscribe_artist_avatar_over_first_user_link():
     html = """
     <html>

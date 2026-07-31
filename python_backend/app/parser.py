@@ -63,7 +63,7 @@ def extract_video_page(page_url: str, html: str, download_html: str | None = Non
         "thumbnail": extract_thumbnail(tree, page_url),
         "videoId": extract_video_id(page_url),
         "comicOriginal": comic_original,
-        "playlist": extract_cards(tree.css("#video-playlist-wrapper a[href*='watch?v=']"), page_url),
+        "playlist": extract_playlist_cards(tree, page_url),
         "relatedVideos": extract_related_videos(tree, page_url),
         "creator": {
             "name": creator_name,
@@ -436,11 +436,21 @@ def extract_related_videos(tree: HTMLParser, page_url: str) -> list[dict[str, st
     return extract_cards(tree.css(".home-rows-videos-wrapper a[href*='watch?v='], .home-rows-videos a[href*='watch?v=']"), page_url)
 
 
+def extract_playlist_cards(tree: HTMLParser, page_url: str) -> list[dict[str, str]]:
+    nodes = tree.css(
+        "#video-playlist-wrapper a[href*='watch?v='], "
+        ".video-playlist-wrapper a[href*='watch?v='], "
+        ".playlist-scroll-node a[href*='watch?v='], "
+        ".playlist-hover-wrap[data-href*='watch?v=']"
+    )
+    return extract_cards(nodes, page_url)
+
+
 def extract_cards(nodes: list[Node], current_url: str) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     seen: set[str] = set()
     for node in nodes:
-        href = node.attributes.get("href", "")
+        href = node.attributes.get("href", "") or node.attributes.get("data-href", "")
         url = absolutize_watch_url(href, current_url)
         if not url or url in seen:
             continue
