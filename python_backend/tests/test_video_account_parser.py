@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from python_backend.app.parser import extract_video_page, parse_playlist_grid, parse_video_grid
 
 
@@ -156,6 +158,54 @@ def test_extract_video_page_reads_new_sidebar_playlist_layout():
     assert result["playlist"][0]["duration"] == "06:39"
     assert result["playlist"][0]["likes"] == "99%"
     assert result["playlist"][0]["views"] == "2.6万次"
+
+
+def test_extract_video_page_reads_playlist_hover_wrap_without_thumbnails():
+    html = """
+    <html>
+      <body>
+        <h1 id="shareBtn-title">鄉下幾乎沒有娛樂活動 1</h1>
+        <meta property="og:image" content="https://img.test/current.jpg">
+        <div class="video-playlist-wrapper">
+          <div id="playlist-top-block" class="video-playlist-top">
+            <h4>
+              <span>清單</span>
+              <a href="https://hanime1.me/playlist?list=921339&amp;sort=latest">田舎にはこれくらいしか娯楽がない</a>
+            </h4>
+          </div>
+          <div id="playlist-scroll" class="playlist-scroll-node">
+            <div class="playlist-hover-wrap clickable-row" data-href="https://hanime1.me/watch?v=407463">
+              <div class="video-info-container">
+                <h4 class="video-title"><a href="https://hanime1.me/watch?v=407463">鄉下幾乎沒有娛樂活動 2</a></h4>
+              </div>
+            </div>
+            <div class="playlist-hover-wrap clickable-row videos-scroll" data-href="https://hanime1.me/watch?v=407460">
+              <div class="video-info-container">
+                <h4 class="video-title"><a href="https://hanime1.me/watch?v=407460">鄉下幾乎沒有娛樂活動 1</a></h4>
+              </div>
+            </div>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    result = extract_video_page("https://hanime1.me/watch?v=407460", html)
+
+    assert [item["videoId"] for item in result["playlist"]] == ["407463", "407460"]
+    assert result["playlist"][0]["title"] == "鄉下幾乎沒有娛樂活動 2"
+    assert result["playlist"][1]["title"] == "鄉下幾乎沒有娛樂活動 1"
+
+
+def test_extract_video_page_reads_fixture_playlist_sidebar_layout():
+    fixture = Path(__file__).parent / "fixtures" / "playlist_407460_snippet.html"
+    html = fixture.read_text(encoding="utf-8")
+
+    result = extract_video_page("https://hanime1.me/watch?v=407460", html)
+
+    assert [item["videoId"] for item in result["playlist"]] == ["407463", "407460"]
+    assert result["playlist"][0]["title"] == "鄉下幾乎沒有娛樂活動 2"
+    assert result["playlist"][1]["duration"] == "15:59"
 
 
 def test_extract_video_page_prefers_subscribe_artist_avatar_over_first_user_link():

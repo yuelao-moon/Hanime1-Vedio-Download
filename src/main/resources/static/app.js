@@ -140,6 +140,8 @@ document.addEventListener("DOMContentLoaded", () => {
     let searchOptions = null;
     let currentVideoData = null;
     let currentCommentContext = { csrfToken: "", currentUserId: "", avatarUrl: "", videoId: "" };
+    const REPLY_PAGE_SIZE = 6;
+    const replyStateByCommentId = new Map();
     let authState = { loggedIn: false, username: "", avatarUrl: "", userId: "" };
     let shortcutBack = "Alt+ArrowLeft";
     let shortcutForward = "Alt+ArrowRight";
@@ -407,7 +409,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function getParserCacheKey(url) {
-        return `parse:${String(url || "").trim()}`;
+        // v2: invalidate older parse caches that often stored empty playlists
+        // before the sidebar series extractor was updated.
+        return `parse:v2:${String(url || "").trim()}`;
     }
 
     function getCurrentPageCacheKey() {
@@ -1761,6 +1765,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function renderComments(comments = []) {
         const list = Array.isArray(comments) ? comments : [];
         if (!commentsList || !commentsCount) return;
+        replyStateByCommentId.clear();
         commentsCount.textContent = list.length;
         const createForm = renderVideoCommentForm();
 
@@ -1811,16 +1816,83 @@ document.addEventListener("DOMContentLoaded", () => {
         renderComments(payload?.comments || []);
     }
 
-    function renderReplies(commentId, replies = []) {
+    function getReplyToggleButton(commentId) {
+        return commentsList?.querySelector(`.comment-reply-btn[data-comment-id="${CSS.escape(commentId)}"]`) || null;
+    }
+
+    function setReplyToggleButtonLabel(commentId, { expanded = false, count = 0 } = {}) {
+        const button = getReplyToggleButton(commentId);
+        if (!button) return;
+        button.textContent = expanded
+            ? "收起回复"
+            : (count ? `查看回复 (${count})` : "查看回复");
+    }
+
+    function ensureReplyState(commentId, replies = []) {
+        const list = Array.isArray(replies) ? replies : [];
+        const existing = replyStateByCommentId.get(commentId);
+        const state = {
+            replies: list,
+            visibleCount: existing?.visibleCount || REPLY_PAGE_SIZE,
+            expanded: true
+        };
+        if (state.visibleCount < REPLY_PAGE_SIZE) state.visibleCount = REPLY_PAGE_SIZE;
+        if (state.visibleCount > list.length) state.visibleCount = Math.max(REPLY_PAGE_SIZE, list.length);
+        replyStateByCommentId.set(commentId, state);
+        return state;
+    }
+
+    function collapseReplies(commentId) {
+        const repliesBox = commentsList?.querySelector(`[data-replies-for="${CSS.escape(commentId)}"]`);
+        if (repliesBox) repliesBox.innerHTML = "";
+        const state = replyStateByCommentId.get(commentId);
+        const count = Array.isArray(state?.replies) ? state.replies.length : 0;
+        if (state) {
+            state.expanded = false;
+            state.visibleCount = REPLY_PAGE_SIZE;
+            replyStateByCommentId.set(commentId, state);
+        }
+        const button = getReplyToggleButton(commentId);
+        const fallbackCount = Number(button?.textContent?.match(/\((\d+)\)/)?.[1] || count || 0);
+        setReplyToggleButtonLabel(commentId, { expanded: false, count: count || fallbackCount });
+        const commentItem = commentsList?.querySelector(`.comment-item[data-comment-id="${CSS.escape(commentId)}"]`);
+        const scrollTarget = commentItem || button;
+        if (scrollTarget) {
+            requestAnimationFrame(() => {
+                scrollTarget.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+            });
+        }
+    }
+
+    function showMoreReplies(commentId) {
+        const state = replyStateByCommentId.get(commentId);
+        if (!state?.expanded) return;
+        state.visibleCount = Math.min(
+            (state.visibleCount || REPLY_PAGE_SIZE) + REPLY_PAGE_SIZE,
+            state.replies.length
+        );
+        replyStateByCommentId.set(commentId, state);
+        renderReplies(commentId, state.replies, state.visibleCount);
+    }
+
+    function renderReplies(commentId, replies = [], visibleCount = REPLY_PAGE_SIZE) {
         const repliesBox = commentsList?.querySelector(`[data-replies-for="${CSS.escape(commentId)}"]`);
         if (!repliesBox) return;
         const list = Array.isArray(replies) ? replies : [];
         if (list.length === 0) {
-            repliesBox.innerHTML = `<div class="comment-reply-empty">暂无回复</div>`;
+            repliesBox.innerHTML = `
+                <div class="comment-reply-empty">暂无回复</div>
+                <div class="comment-replies-footer">
+                    <button class="comment-replies-collapse-btn" type="button" data-comment-id="${escapeHtml(commentId)}">收回回复</button>
+                </div>
+            `;
+            setReplyToggleButtonLabel(commentId, { expanded: true, count: 0 });
             return;
         }
         const parentCommentId = escapeHtml(commentId);
-        repliesBox.innerHTML = list.map((reply) => {
+        const shown = list.slice(0, Math.max(REPLY_PAGE_SIZE, visibleCount));
+        const remaining = Math.max(0, list.length - shown.length);
+        const itemsHtml = shown.map((reply) => {
             const replyAvatar = renderCommentAvatar({
                 userName: reply.userName,
                 avatarUrl: reply.avatarUrl
@@ -1842,6 +1914,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
             `;
         }).join("");
+        const footerHtml = `
+            <div class="comment-replies-footer">
+                ${remaining > 0 ? `<button class="comment-replies-more-btn" type="button" data-comment-id="${parentCommentId}">显示更多 (${remaining})</button>` : ""}
+                <button class="comment-replies-collapse-btn" type="button" data-comment-id="${parentCommentId}">收回回复</button>
+            </div>
+        `;
+        repliesBox.innerHTML = itemsHtml + footerHtml;
+        setReplyToggleButtonLabel(commentId, { expanded: true, count: list.length });
     }
 
     async function loadComments(videoId) {
@@ -1951,7 +2031,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (result?.csrf_token) currentCommentContext.csrfToken = result.csrf_token;
             if (input) input.value = "";
             form.classList.add("hidden");
-            await loadReplies(commentId);
+            await loadReplies(commentId, null, { force: true, revealAll: true });
         } catch (error) {
             alert(`回复失败: ${error.message}`);
         } finally {
@@ -1990,25 +2070,47 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    async function loadReplies(commentId, button) {
+    async function loadReplies(commentId, button, options = {}) {
         if (!commentId) return;
+        const force = !!options.force;
+        const revealAll = !!options.revealAll;
+        const existing = replyStateByCommentId.get(commentId);
+
+        if (!force && existing?.expanded) {
+            collapseReplies(commentId);
+            return;
+        }
+
+        if (!force && existing && Array.isArray(existing.replies) && !existing.expanded) {
+            existing.expanded = true;
+            existing.visibleCount = REPLY_PAGE_SIZE;
+            replyStateByCommentId.set(commentId, existing);
+            renderReplies(commentId, existing.replies, existing.visibleCount);
+            return;
+        }
+
         const repliesBox = commentsList?.querySelector(`[data-replies-for="${CSS.escape(commentId)}"]`);
         if (repliesBox) {
             repliesBox.innerHTML = `<div class="comment-reply-empty">正在载入回复...</div>`;
         }
-        if (button) button.disabled = true;
+        const toggleButton = button || getReplyToggleButton(commentId);
+        if (toggleButton) toggleButton.disabled = true;
         try {
             const response = await fetch(`/api/replies?commentId=${encodeURIComponent(commentId)}`);
             if (!response.ok) {
                 throw new Error(await response.text() || "回复载入失败");
             }
-            renderReplies(commentId, await response.json());
+            const replies = await response.json();
+            const state = ensureReplyState(commentId, replies);
+            if (revealAll) state.visibleCount = state.replies.length || REPLY_PAGE_SIZE;
+            replyStateByCommentId.set(commentId, state);
+            renderReplies(commentId, state.replies, state.visibleCount);
         } catch (error) {
             if (repliesBox) {
                 repliesBox.innerHTML = `<div class="comment-reply-empty">回复载入失败: ${escapeHtml(error.message)}</div>`;
             }
         } finally {
-            if (button) button.disabled = false;
+            if (toggleButton) toggleButton.disabled = false;
         }
     }
 
@@ -3189,7 +3291,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     refreshLoginStatus();
-    restorePageCacheFromBackend();
+    const pageCacheReady = restorePageCacheFromBackend();
 
     // Auto-collapse log panel on startup
     if (statusPanelWrapper) statusPanelWrapper.classList.add("collapsed");
@@ -3559,7 +3661,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     parseBtn.addEventListener("click", async () => {
-        await loadParserUrl(urlInput.value, true, true);
+        // Explicit parse should always re-fetch so stale empty playlists are not sticky.
+        await loadParserUrl(urlInput.value, true, false);
     });
 
     function renderUi(data) {
@@ -3823,6 +3926,16 @@ document.addEventListener("DOMContentLoaded", () => {
                 toggleCommentReplyForm(toggleButton.dataset.commentId);
                 return;
             }
+            const moreButton = event.target.closest(".comment-replies-more-btn[data-comment-id]");
+            if (moreButton) {
+                showMoreReplies(moreButton.dataset.commentId);
+                return;
+            }
+            const collapseButton = event.target.closest(".comment-replies-collapse-btn[data-comment-id]");
+            if (collapseButton) {
+                collapseReplies(collapseButton.dataset.commentId);
+                return;
+            }
             const replyButton = event.target.closest(".comment-reply-btn[data-comment-id]");
             if (!replyButton) return;
             loadReplies(replyButton.dataset.commentId, replyButton);
@@ -4029,6 +4142,8 @@ document.addEventListener("DOMContentLoaded", () => {
     fetchDownloadSnapshot();
     connectDownloadStream();
     window.addEventListener("resize", updatePlaylistPanelLayout);
-    restoreInitialRouteFromHash();
+    pageCacheReady.finally(() => {
+        restoreInitialRouteFromHash();
+    });
 
 });

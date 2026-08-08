@@ -437,16 +437,26 @@ def extract_related_videos(tree: HTMLParser, page_url: str) -> list[dict[str, st
 
 
 def extract_playlist_cards(tree: HTMLParser, page_url: str) -> list[dict[str, str]]:
+    # Prefer one node per episode card. Nested thumb/title anchors otherwise
+    # depend on image discovery and can drop valid series entries.
+    wraps = tree.css(
+        ".video-playlist-wrapper .playlist-hover-wrap[data-href*='watch?v='], "
+        "#playlist-scroll .playlist-hover-wrap[data-href*='watch?v='], "
+        ".playlist-scroll-node .playlist-hover-wrap[data-href*='watch?v='], "
+        ".playlist-hover-wrap[data-href*='watch?v=']"
+    )
+    if wraps:
+        return extract_cards(wraps, page_url, require_image=False)
+
     nodes = tree.css(
         "#video-playlist-wrapper a[href*='watch?v='], "
         ".video-playlist-wrapper a[href*='watch?v='], "
-        ".playlist-scroll-node a[href*='watch?v='], "
-        ".playlist-hover-wrap[data-href*='watch?v=']"
+        ".playlist-scroll-node a[href*='watch?v=']"
     )
-    return extract_cards(nodes, page_url)
+    return extract_cards(nodes, page_url, require_image=False)
 
 
-def extract_cards(nodes: list[Node], current_url: str) -> list[dict[str, str]]:
+def extract_cards(nodes: list[Node], current_url: str, require_image: bool = True) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     seen: set[str] = set()
     for node in nodes:
@@ -456,7 +466,9 @@ def extract_cards(nodes: list[Node], current_url: str) -> list[dict[str, str]]:
             continue
         title = extract_card_title(node)
         image = best_image(node, current_url)
-        if not title or not image:
+        if not title:
+            continue
+        if require_image and not image:
             continue
             
         # Parse extra fields

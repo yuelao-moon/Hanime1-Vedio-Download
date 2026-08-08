@@ -131,6 +131,24 @@ def test_frontend_comment_reply_create_ui():
     assert "result?.csrf_token" in app_js
 
 
+def test_frontend_comment_replies_toggle_and_pagination():
+    app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
+    style_css = Path("src/main/resources/static/style.css").read_text(encoding="utf-8")
+
+    assert "REPLY_PAGE_SIZE = 6" in app_js
+    assert "function collapseReplies" in app_js
+    assert "function showMoreReplies" in app_js
+    assert "收起回复" in app_js
+    assert "收回回复" in app_js
+    assert "显示更多" in app_js
+    assert "comment-replies-more-btn" in app_js
+    assert "comment-replies-collapse-btn" in app_js
+    assert "comment-replies-footer" in style_css
+    assert "revealAll: true" in app_js
+    assert "scrollIntoView" in app_js
+    assert "collapseReplies" in app_js
+
+
 def test_frontend_comment_like_ui():
     app_js = Path("src/main/resources/static/app.js").read_text(encoding="utf-8")
 
