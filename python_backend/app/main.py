@@ -19,6 +19,7 @@ from .scraper import HanimeScraper, LoginError, SessionBlockedError
 from .settings import AppSettings, SettingsStore
 from .local_db import LocalStore
 from .cookie_refresh import CookieRefreshManager
+from .chrome_cookies import cookies_for_host, cookies_to_header, load_cookies
 from .account import HanimeAccountClient
 
 
@@ -132,6 +133,27 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
         if cookie_manager is None:
             raise HTTPException(status_code=503, detail="Cookie 刷新器不可用")
         return await cookie_manager.refresh()
+
+    @app.get("/api/cookies/export")
+    async def export_cookies():
+        """Return a paste-ready Cookie header for the browser-free downloader."""
+        base_cookies = cookies_for_host(load_cookies(home), "hanime1.me")
+        merged: dict[str, str] = {}
+        for cookie in base_cookies:
+            name, value = cookie.get("name"), cookie.get("value")
+            if name and value:
+                merged[name] = value
+        account_session = getattr(scraper, "account_session", None)
+        if account_session is not None and hasattr(account_session, "load_login_cookies"):
+            for name, value in account_session.load_login_cookies().items():
+                if name and value:
+                    merged[name] = value
+        if not merged:
+            raise HTTPException(status_code=404, detail="尚未保存可导出的 Cookie")
+        return {
+            "cookie": cookies_to_header([{"name": name, "value": value} for name, value in merged.items()]),
+            "cookieCount": len(merged),
+        }
 
     @app.post("/api/login")
     async def login(payload: dict):

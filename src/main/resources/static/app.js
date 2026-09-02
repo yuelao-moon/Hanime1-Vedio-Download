@@ -3401,6 +3401,28 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    const exportCookieBtn = document.getElementById("exportCookieBtn");
+    if (exportCookieBtn) {
+        exportCookieBtn.addEventListener("click", async () => {
+            exportCookieBtn.disabled = true;
+            updateCookieStatus("正在生成终端 Cookie...");
+            try {
+                const response = await fetch("/api/cookies/export");
+                if (!response.ok) {
+                    throw new Error(await response.text() || "没有可导出的 Cookie");
+                }
+                const data = await response.json();
+                if (!data.cookie) throw new Error("没有可导出的 Cookie");
+                await navigator.clipboard.writeText(data.cookie);
+                updateCookieStatus(`终端 Cookie 已复制（${data.cookieCount || 0} 项）`);
+            } catch (error) {
+                updateCookieStatus(`终端 Cookie 导出失败: ${error.message}`);
+            } finally {
+                exportCookieBtn.disabled = false;
+            }
+        });
+    }
+
     // 检查更新
     const checkUpdateBtn = document.getElementById("checkUpdateBtn");
     const updateResult = document.getElementById("updateResult");
