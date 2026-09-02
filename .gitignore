@@ -46,3 +46,4 @@ build/
 docs/
 dist/
 CLAUDE.md
+.worktrees/
