@@ -405,7 +405,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function getSearchCacheKey(page) {
-        return `search:${buildSearchParams(page).toString()}`;
+        // v2: v1 cached unfiltered results because content genres were sent as
+        // the upstream author-search `type` parameter instead of `genre`.
+        return `search:v2:${buildSearchParams(page).toString()}`;
     }
 
     function getParserCacheKey(url) {

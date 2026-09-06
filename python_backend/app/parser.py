@@ -10,6 +10,35 @@ from selectolax.parser import HTMLParser, Node
 BASE_URL = "https://hanime1.me"
 
 
+def parse_search_options(html: str) -> dict:
+    """Read the actual values submitted by Hanime1's search controls."""
+    tree = HTMLParser(html or "")
+
+    def data_values(selector: str) -> list[str]:
+        values: list[str] = []
+        for node in tree.css(selector):
+            value = (attr(node, "data-value") or "").strip()
+            if value and value != "全部" and value not in values:
+                values.append(value)
+        return values
+
+    tags: list[str] = []
+    for node in tree.css('#tags input[name="tags[]"]'):
+        value = (attr(node, "value") or "").strip()
+        if value and value not in tags:
+            tags.append(value)
+
+    genres = data_values("#genre-modal .genre-option[data-value]")
+    return {
+        "types": genres,
+        "genres": genres,
+        "sorts": data_values("#sort-modal .hentai-sort-options-wrapper[data-value]"),
+        "dates": data_values("#date-modal .hentai-date-options-wrapper[data-value]"),
+        "durations": data_values("#duration-modal .hentai-duration-options-wrapper[data-value]"),
+        "tagGroups": [{"name": "內容標籤", "tags": tags}] if tags else [],
+    }
+
+
 def absolute_image_url(value: str, current_url: str = BASE_URL) -> str:
     value = clean_url(value)
     if not value or value.startswith(("data:", "blob:", "javascript:")):

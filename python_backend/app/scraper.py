@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 import httpx
 from selectolax.parser import HTMLParser
 
-from .parser import extract_video_page, looks_like_blocked_page, parse_total_pages, parse_video_grid, parse_home_page, parse_playlist_grid, parse_subscription_creators, parse_query_creator_info
+from .parser import extract_video_page, looks_like_blocked_page, parse_total_pages, parse_video_grid, parse_home_page, parse_playlist_grid, parse_subscription_creators, parse_query_creator_info, parse_search_options
 from .paths import app_home
 from .settings import AppSettings
 from .account import AccountSession, parse_home_user
@@ -38,6 +38,16 @@ PROFILE_SECTION_TITLES = {
     "histories": "观看历史",
 }
 TRUSTED_MEDIA_HOSTS = ("hanime1.me", "hembed.com")
+CONTENT_GENRES = {"裏番", "里番", "泡麵番", "泡面番", "Motion Anime", "3DCG", "2.5D", "2D動畫", "2D动画", "AI生成", "MMD", "Cosplay"}
+SEARCH_VALUE_ALIASES = {
+    "里番": "裏番",
+    "泡面番": "泡麵番",
+    "2D动画": "2D動畫",
+    "本周排行": "本週排行",
+    "點讚比例": "讚好比例",
+    "过去 1 周": "過去 1 週",
+    "過去 1 周": "過去 1 週",
+}
 
 
 class SessionBlockedError(RuntimeError):
@@ -271,12 +281,20 @@ class HanimeScraper:
 
     async def search(self, **kwargs) -> dict:
         page = int(kwargs.get("page") or 1)
+        search_type = str(kwargs.get("type") or "").strip()
+        genre = str(kwargs.get("genre") or "").strip()
+        if search_type in CONTENT_GENRES:
+            genre = genre or SEARCH_VALUE_ALIASES.get(search_type, search_type)
+            search_type = ""
+
+        sort = SEARCH_VALUE_ALIASES.get(str(kwargs.get("sort") or "").strip(), str(kwargs.get("sort") or "").strip())
+        date = SEARCH_VALUE_ALIASES.get(str(kwargs.get("date") or "").strip(), str(kwargs.get("date") or "").strip())
         params: list[tuple[str, str]] = [
             ("query", kwargs.get("query") or ""),
-            ("type", kwargs.get("type") or ""),
-            ("genre", kwargs.get("genre") or ""),
-            ("sort", kwargs.get("sort") or ""),
-            ("date", kwargs.get("date") or ""),
+            ("type", search_type),
+            ("genre", SEARCH_VALUE_ALIASES.get(genre, genre)),
+            ("sort", sort),
+            ("date", date),
             ("duration", kwargs.get("duration") or ""),
             ("page", str(max(page, 1))),
         ]
@@ -285,6 +303,13 @@ class HanimeScraper:
                 params.append(("tags[]", tag))
         html = await self.fetch_html(f"https://hanime1.me/search?{urlencode(params)}", "https://hanime1.me/search")
         return {"videos": parse_video_grid(html), "currentPage": page, "totalPages": parse_total_pages(html, page)}
+
+    async def search_options(self) -> dict:
+        html = await self.fetch_html("https://hanime1.me/search", "https://hanime1.me/search")
+        options = parse_search_options(html)
+        if not options["genres"] or not options["sorts"]:
+            raise ValueError("搜索筛选项解析失败")
+        return options
 
     async def comments(self, video_id: str) -> list[dict]:
         data = await self.comments_context(video_id)

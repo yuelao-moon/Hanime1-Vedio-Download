@@ -120,6 +120,11 @@ def create_app(app_home: str | Path | None = None, scraper=None, account_client=
 
     @app.get("/api/search/options")
     async def search_options():
+        if hasattr(scraper, "search_options"):
+            try:
+                return await scraper.search_options()
+            except Exception as exc:
+                log.warning(f"[search] 载入实时筛选项失败，使用本地默认值: {exc}")
         return default_search_options()
 
     @app.get("/api/cookies/status")
@@ -772,8 +777,8 @@ def default_search_options() -> dict:
     return {
         "types": ["裏番", "泡麵番", "Motion Anime", "3DCG", "2.5D", "2D動畫", "AI生成", "MMD", "Cosplay"],
         "genres": ["裏番", "泡麵番", "Motion Anime", "3DCG", "2.5D", "2D動畫", "AI生成", "MMD", "Cosplay"],
-        "sorts": ["最新上市", "最新上傳", "本日排行", "本周排行", "本月排行", "觀看次數", "點讚比例", "時長最長", "他們在看"],
-        "dates": ["過去 24 小時", "過去 2 天", "過去 1 周", "過去 1 個月", "過去 3 個月", "過去 1 年"],
+        "sorts": ["最新上市", "最新上傳", "本日排行", "本週排行", "本月排行", "觀看次數", "讚好比例", "時長最長", "他們在看"],
+        "dates": ["過去 24 小時", "過去 2 天", "過去 1 週", "過去 1 個月", "過去 3 個月", "過去 1 年"],
         "durations": ["1 分鐘 +", "5 分鐘 +", "10 分鐘 +", "20 分鐘 +", "30 分鐘 +", "60 分鐘 +", "0 - 10 分鐘", "0 - 20 分鐘"],
         "tagGroups": [],
     }
